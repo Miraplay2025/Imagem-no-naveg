@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto Flow Ultra Pro</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { background: #020617; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+        .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; }
+        .prompt-textarea { height: 40vh; resize: none; font-family: monospace; }
+        .btn-primary { background: #3b82f6; transition: all 0.2s; }
+        .btn-primary:active { transform: scale(0.98); }
+        .log-box { font-size: 11px; max-height: 150px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; }
+    </style>
+</head>
+<body class="p-4 flex flex-col items-center">
+    <div class="w-full max-w-md space-y-4">
+        <h1 class="text-xl font-bold text-center text-blue-400">AUTOMATION FLOW</h1>
+
+        <div class="space-y-3">
+            <input id="flow-url" type="text" placeholder="Cole o link do Flow aqui" class="w-full p-4 mobile-field outline-none focus:ring-2 ring-blue-500">
+            <div class="flex gap-2">
+                <label class="flex-1 p-3 text-center mobile-field cursor-pointer text-sm bg-slate-800">
+                    📂 Cookies Flox
+                    <input type="file" id="cookies-file" class="hidden">
+                </label>
+            </div>
+        </div>
+
+        <div class="space-y-1">
+            <div class="flex justify-between text-[10px] text-slate-400 px-1">
+                <span>INSERIR PROMPTS</span>
+                <span id="awu-count">0 prompts</span>
+            </div>
+            <textarea id="prompt-input" class="w-full p-4 mobile-field prompt-textarea outline-none" placeholder="Prompt 1: Exemplo...&#10;Prompt 2: Exemplo..."></textarea>
+        </div>
+
+        <div>
+            <input type="file" id="asset-upload" multiple class="hidden">
+            <button onclick="document.getElementById('asset-upload').click()" class="w-full p-3 mobile-field bg-slate-800 text-sm">Adicionar Referências</button>
+            <div id="assets-container" class="grid grid-cols-3 gap-2 mt-2"></div>
+        </div>
+
+        <div class="flex gap-2" id="control-panel">
+            <button id="btn-start" class="flex-1 p-4 btn-primary rounded-2xl font-bold">Iniciar Automação</button>
+            <button id="btn-stop" class="hidden p-4 bg-red-600 rounded-2xl font-bold">Parar</button>
+        </div>
+
+        <div id="confirm-box" class="hidden p-4 bg-green-900/50 border border-green-500 rounded-xl text-center space-y-2">
+            <p class="text-sm font-semibold">login realizado com sucesso , pagina carregada com sucesso</p>
+            <button id="btn-confirm" class="w-full p-2 bg-green-500 text-black font-bold rounded-lg">Confirmar</button>
+        </div>
+
+        <div id="logs" class="log-box"></div>
+        <div id="results" class="space-y-6 pt-4 pb-10"></div>
+    </div>
+
+    <script>
+        const socket = io();
+        const state = { prompts: [], assets: [] };
+
+        document.getElementById('prompt-input').addEventListener('input', (e) => {
+            const rawMatches = e.target.value.split(/\bPrompt\b/i).slice(1);
+            state.prompts = rawMatches.map(text => text.replace(/^[\s\d:.-]+/, "").trim()).filter(Boolean);
+            document.getElementById("awu-count").textContent = `${state.prompts.length} prompts`;
+            localStorage.setItem('saved_raw_prompts', e.target.value);
+        });
+
+        document.getElementById('asset-upload').addEventListener('change', async (e) => {
+            for (let file of e.target.files) {
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    state.assets.push({ nameNoExt: file.name.split('.')[0], data: ev.target.result });
+                    renderAssets();
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        function renderAssets() {
+            const container = document.getElementById('assets-container');
+            container.innerHTML = '';
+            state.assets.forEach((item, index) => {
+                const card = document.createElement("div");
+                card.className = "relative bg-slate-800 rounded-lg overflow-hidden aspect-square";
+                card.innerHTML = `<img src="${item.data}" class="w-full h-full object-cover">
+                    <button onclick="state.assets.splice(${index},1);renderAssets()" class="absolute top-1 right-1 bg-red-500 text-white w-5 h-5 rounded text-xs">✕</button>`;
+                container.appendChild(card);
+            });
+        }
+
+        document.getElementById('btn-start').onclick = () => {
+            const cookiesFile = document.getElementById('cookies-file').files[0];
+            const data = { link: document.getElementById('flow-url').value, prompts: state.prompts, assets: state.assets };
+            if(cookiesFile) {
+                const reader = new FileReader();
+                reader.onload = (e) => { data.cookies = e.target.result; socket.emit('start-automation', data); };
+                reader.readAsText(cookiesFile);
+            } else { socket.emit('start-automation', data); }
+            document.getElementById('btn-start').classList.add('hidden');
+            document.getElementById('btn-stop').classList.remove('hidden');
+        };
+
+        socket.on('automation-status', (res) => { if(res.showConfirm) document.getElementById('confirm-box').classList.remove('hidden'); });
+        document.getElementById('btn-confirm').onclick = () => { socket.emit('confirm-start'); document.getElementById('confirm-box').classList.add('hidden'); };
+        socket.on('log', (msg) => {
+            const div = document.createElement('div'); div.textContent = `> ${msg}`;
+            const box = document.getElementById('logs'); box.prepend(div);
+        });
+
+        socket.on('new-images', (data) => {
+            const container = document.getElementById('results');
+            const section = document.createElement('div');
+            section.innerHTML = `<h2 class="text-xs font-bold text-slate-500 mb-2">Prompt #${data.index}</h2>
+                <div class="grid grid-cols-2 gap-2">${data.urls.map(u => `<img src="${u}" class="rounded-lg border border-slate-800">`).join('')}</div>`;
+            container.prepend(section);
+        });
+
+        document.getElementById('btn-stop').onclick = () => { socket.emit('stop-automation'); };
+        socket.on('automation-finished', (msg) => { alert(msg); location.reload(); });
+
+        window.onload = () => {
+            const raw = localStorage.getItem('saved_raw_prompts');
+            if(raw) {
+                document.getElementById('prompt-input').value = raw;
+                document.getElementById('prompt-input').dispatchEvent(new Event('input'));
+            }
+        }
+    </script>
+</body>
+</html>
