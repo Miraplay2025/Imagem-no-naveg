@@ -1,0 +1,17 @@
+{
+  "name": "auto-flow-ultra",
+  "version": "1.0.0",
+  "description": "Automação para Flux/Flow via Puppeteer",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "puppeteer": "^21.0.0",
+    "socket.io": "^4.7.2"
+  }
+}
