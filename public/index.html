@@ -10,11 +10,19 @@
         body { background: #020617; color: #e2e8f0; font-family: sans-serif; }
         .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; }
         .log-box { font-size: 11px; max-height: 200px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; border: 1px solid #333; }
+        .error-overlay { background: rgba(0,0,0,0.9); border: 2px solid #ef4444; }
     </style>
 </head>
 <body class="p-4 flex flex-col items-center">
     <div class="w-full max-w-md space-y-4">
         <h1 class="text-xl font-bold text-center text-blue-400">AUTOMATION FLOW</h1>
+
+        <div id="error-display" class="hidden p-4 error-overlay rounded-xl space-y-2">
+            <h2 class="text-red-500 font-bold text-sm">❌ ERRO DETECTADO</h2>
+            <p id="error-text" class="text-[10px] text-white"></p>
+            <img id="error-img" class="w-full border border-red-500 rounded-lg">
+            <button onclick="location.reload()" class="w-full p-2 bg-red-600 text-white text-xs rounded-lg">Recarregar Sistema</button>
+        </div>
 
         <input id="flow-url" type="text" placeholder="Link do Flow" class="w-full p-4 mobile-field outline-none">
         
@@ -22,7 +30,7 @@
             📂 Carregar Cookies (.json)
             <input type="file" id="cookies-file" class="hidden" accept=".json">
         </label>
-        <div id="cookie-info" class="hidden text-center text-green-400 text-[10px]">✅ Pronto (Codificado em Base64)</div>
+        <div id="cookie-info" class="hidden text-center text-green-400 text-[10px]">✅ Cookies Blindados (Base64)</div>
 
         <textarea id="prompt-input" class="w-full p-4 mobile-field h-40 outline-none" placeholder="Prompt 1...&#10;Prompt 2..."></textarea>
         
@@ -43,14 +51,12 @@
         let cookiesBase64 = null;
         const state = { prompts: [], assets: [] };
 
-        // Converte o arquivo para Base64 assim que selecionado
         document.getElementById('cookies-file').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (file) {
                 const reader = new FileReader();
                 reader.onload = (event) => {
                     const text = event.target.result;
-                    // Converte string para Base64 (suporta caracteres especiais)
                     cookiesBase64 = btoa(unescape(encodeURIComponent(text.trim())));
                     document.getElementById('cookie-info').classList.remove('hidden');
                     addLog("Arquivo de cookies codificado com sucesso.");
@@ -65,6 +71,7 @@
         });
 
         document.getElementById('btn-start').onclick = () => {
+            addLog("Solicitando conexão com o navegador...");
             socket.emit('start-automation', {
                 link: document.getElementById('flow-url').value,
                 prompts: state.prompts,
@@ -73,6 +80,13 @@
             document.getElementById('btn-start').classList.add('hidden');
             document.getElementById('btn-stop').classList.remove('hidden');
         };
+
+        socket.on('error-screenshot', (data) => {
+            document.getElementById('error-display').classList.remove('hidden');
+            document.getElementById('error-text').textContent = data.error;
+            document.getElementById('error-img').src = data.img;
+            addLog("ERRO: Print da tela recebido.");
+        });
 
         socket.on('automation-status', (res) => {
             document.getElementById('confirm-box').classList.remove('hidden');
