@@ -28,6 +28,21 @@ let automationState = {
     capturedBlobs: []
 };
 
+// Função auxiliar para tirar print em caso de erro
+async function sendErrorScreenshot(socket, page, errorMsg) {
+    if (page) {
+        try {
+            const screenshot = await page.screenshot({ encoding: 'base64', fullPage: false });
+            socket.emit('error-screenshot', { 
+                img: `data:image/png;base64,${screenshot}`, 
+                error: errorMsg 
+            });
+        } catch (e) {
+            socket.emit('log', 'Não foi possível capturar o print do erro.');
+        }
+    }
+}
+
 io.on('connection', (socket) => {
     console.log('Cliente conectado via Socket');
 
@@ -41,17 +56,19 @@ io.on('connection', (socket) => {
                     '--no-sandbox', 
                     '--disable-setuid-sandbox', 
                     '--disable-dev-shm-usage',
-                    '--disable-gpu'
+                    '--disable-gpu',
+                    '--window-size=1280,800'
                 ],
                 executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || null
             });
 
             page = await browser.newPage();
-            await page.setDefaultNavigationTimeout(90000);
+            await page.setViewport({ width: 1280, height: 800 });
+            // Aumentado para 2 minutos para evitar o erro de timeout em conexões lentas
+            await page.setDefaultNavigationTimeout(120000); 
 
             if (data.cookiesBase64) {
                 try {
-                    // Decodifica de Base64 para String UTF-8
                     const decodedCookies = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
                     const cookies = JSON.parse(decodedCookies);
                     await page.setCookie(...cookies);
@@ -67,12 +84,21 @@ io.on('connection', (socket) => {
             automationState.currentIndex = 0;
             automationState.stopRequested = false;
 
-            socket.emit('log', 'Acessando Flow...');
-            await page.goto(data.link, { waitUntil: 'networkidle2' });
+            socket.emit('log', 'Acessando Flow... (Isso pode demorar)');
+            
+            try {
+                await page.goto(data.link, { waitUntil: 'networkidle2' });
+            } catch (navError) {
+                socket.emit('log', `❌ ERRO DE NAVEGAÇÃO: ${navError.message}`);
+                await sendErrorScreenshot(socket, page, navError.message);
+                if (browser) await browser.close();
+                return;
+            }
 
             const currentUrl = page.url();
             if (currentUrl.includes('accounts.google.com') || currentUrl.includes('login')) {
-                socket.emit('log', '⚠️ SESSÃO INVÁLIDA: Redirecionado para Login.');
+                socket.emit('log', '⚠️ SESSÃO INVÁLIDA: O Google pediu login.');
+                await sendErrorScreenshot(socket, page, "Redirecionado para Login");
                 if (browser) await browser.close();
                 return;
             }
@@ -83,7 +109,8 @@ io.on('connection', (socket) => {
             });
 
         } catch (err) {
-            socket.emit('log', `ERRO: ${err.message}`);
+            socket.emit('log', `ERRO CRÍTICO: ${err.message}`);
+            await sendErrorScreenshot(socket, page, err.message);
             if (browser) await browser.close();
         }
     });
