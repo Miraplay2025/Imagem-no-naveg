@@ -6,70 +6,63 @@
     <title>Auto Flow Ultra Pro</title>
     <script src="/socket.io/socket.io.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
-        body { background: #020617; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+        body { background: #020617; color: #e2e8f0; font-family: sans-serif; }
         .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; }
-        .prompt-textarea { height: 40vh; resize: none; font-family: monospace; }
-        .btn-primary { background: #3b82f6; transition: all 0.2s; }
-        .btn-primary:active { transform: scale(0.98); }
-        .log-box { font-size: 11px; max-height: 180px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; border: 1px solid #333; }
-        .status-badge { background: #10b981; color: #000; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 4px; margin-top: 5px; display: inline-block; }
+        .log-box { font-size: 11px; max-height: 200px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; border: 1px solid #333; }
+        .btn-start { background: #3b82f6; width: 100%; padding: 1rem; border-radius: 12px; font-weight: bold; }
     </style>
 </head>
 <body class="p-4 flex flex-col items-center">
     <div class="w-full max-w-md space-y-4">
         <h1 class="text-xl font-bold text-center text-blue-400">AUTOMATION FLOW</h1>
 
-        <div class="space-y-3">
-            <input id="flow-url" type="text" placeholder="Cole o link do Flow aqui" class="w-full p-4 mobile-field outline-none focus:ring-2 ring-blue-500">
-            
-            <div class="flex flex-col">
-                <label id="cookie-label" class="w-full p-4 text-center mobile-field cursor-pointer text-sm bg-slate-800 border-dashed border-2 border-slate-700">
-                    📂 Selecionar arquivo de Cookies (.json)
-                    <input type="file" id="cookies-file" class="hidden" accept=".json">
-                </label>
-                <div id="cookie-info" class="hidden text-center"><span class="status-badge">✅ ARQUIVO CARREGADO</span></div>
-            </div>
+        <input id="flow-url" type="text" placeholder="Link do Flow" class="w-full p-4 mobile-field outline-none">
+        
+        <div class="flex flex-col gap-2">
+            <label id="cookie-label" class="p-4 text-center mobile-field cursor-pointer text-sm bg-slate-800 border-dashed border-2">
+                📂 Upload Cookies (.json)
+                <input type="file" id="cookies-file" class="hidden" accept=".json">
+            </label>
+            <div id="cookie-info" class="hidden text-center text-green-400 text-xs">✅ Cookies Selecionados</div>
         </div>
 
-        <div class="space-y-1">
-            <div class="flex justify-between text-[10px] text-slate-400 px-1">
-                <span>INSERIR PROMPTS</span>
-                <span id="awu-count">0 prompts</span>
-            </div>
-            <textarea id="prompt-input" class="w-full p-4 mobile-field prompt-textarea outline-none" placeholder="Prompt 1: Exemplo...&#10;Prompt 2: Exemplo..."></textarea>
-        </div>
+        <textarea id="prompt-input" class="w-full p-4 mobile-field h-40 outline-none" placeholder="Prompt 1...&#10;Prompt 2..."></textarea>
+        
+        <div id="awu-count" class="text-right text-xs text-slate-500">0 prompts</div>
 
-        <div>
-            <input type="file" id="asset-upload" multiple class="hidden">
-            <button onclick="document.getElementById('asset-upload').click()" class="w-full p-3 mobile-field bg-slate-800 text-sm">Adicionar Referências (Fotos)</button>
-            <div id="assets-container" class="grid grid-cols-3 gap-2 mt-2"></div>
-        </div>
-
-        <div class="flex gap-2" id="control-panel">
-            <button id="btn-start" class="flex-1 p-4 btn-primary rounded-2xl font-bold">Iniciar Automação</button>
-            <button id="btn-stop" class="hidden p-4 bg-red-600 rounded-2xl font-bold">Parar Tudo</button>
-        </div>
+        <button id="btn-start" class="btn-start">Iniciar Automação</button>
+        <button id="btn-stop" class="hidden w-full p-4 bg-red-600 rounded-xl font-bold">Parar Tudo</button>
 
         <div id="confirm-box" class="hidden p-4 bg-green-900/50 border border-green-500 rounded-xl text-center space-y-2">
-            <p id="confirm-msg" class="text-sm font-semibold text-green-300">Página pronta para começar!</p>
+            <p id="confirm-msg" class="text-sm font-semibold">Página Carregada!</p>
             <button id="btn-confirm" class="w-full p-2 bg-green-500 text-black font-bold rounded-lg">Confirmar e Rodar</button>
         </div>
 
         <div id="logs" class="log-box"></div>
-        <div id="results" class="space-y-6 pt-4 pb-10"></div>
+        <div id="results" class="space-y-4"></div>
     </div>
 
     <script>
         const socket = io();
-        const state = { prompts: [], assets: [] };
+        const state = { prompts: [], assets: [], cookiesData: null };
 
-        // Feedback de Cookies
+        // Log de conexão para depurar no celular
+        socket.on('connect', () => {
+            addLog("Conectado ao servidor via Socket.");
+        });
+
+        // Leitura de Cookies com tratamento de erro
         document.getElementById('cookies-file').addEventListener('change', function(e) {
-            if (this.files[0]) {
-                document.getElementById('cookie-info').classList.remove('hidden');
-                document.getElementById('cookie-label').textContent = "📄 " + this.files[0].name;
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    state.cookiesData = event.target.result;
+                    document.getElementById('cookie-info').classList.remove('hidden');
+                    addLog("Cookies carregados na memória.");
+                };
+                reader.readAsText(file);
             }
         });
 
@@ -77,93 +70,51 @@
             const rawMatches = e.target.value.split(/\bPrompt\b/i).slice(1);
             state.prompts = rawMatches.map(text => text.replace(/^[\s\d:.-]+/, "").trim()).filter(Boolean);
             document.getElementById("awu-count").textContent = `${state.prompts.length} prompts`;
-            localStorage.setItem('saved_raw_prompts', e.target.value);
         });
-
-        document.getElementById('asset-upload').addEventListener('change', async (e) => {
-            for (let file of e.target.files) {
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                    state.assets.push({ nameNoExt: file.name.split('.')[0], data: ev.target.result });
-                    renderAssets();
-                };
-                reader.readAsDataURL(file);
-            }
-        });
-
-        function renderAssets() {
-            const container = document.getElementById('assets-container');
-            container.innerHTML = '';
-            state.assets.forEach((item, index) => {
-                const card = document.createElement("div");
-                card.className = "relative bg-slate-800 rounded-lg overflow-hidden aspect-square";
-                card.innerHTML = `<img src="${item.data}" class="w-full h-full object-cover">
-                    <button onclick="state.assets.splice(${index},1);renderAssets()" class="absolute top-1 right-1 bg-red-500 text-white w-5 h-5 rounded text-xs">✕</button>`;
-                container.appendChild(card);
-            });
-        }
 
         document.getElementById('btn-start').onclick = () => {
-            const cookiesFile = document.getElementById('cookies-file').files[0];
-            const data = { 
-                link: document.getElementById('flow-url').value, 
-                prompts: state.prompts, 
-                assets: state.assets 
-            };
+            const url = document.getElementById('flow-url').value;
+            if (!url) return alert("Insira o link!");
 
-            if(cookiesFile) {
-                const reader = new FileReader();
-                reader.onload = (e) => { 
-                    data.cookies = e.target.result; 
-                    socket.emit('start-automation', data); 
-                };
-                reader.readAsText(cookiesFile);
-            } else { 
-                socket.emit('start-automation', data); 
-            }
+            addLog("Enviando solicitação de início...");
+            socket.emit('start-automation', {
+                link: url,
+                prompts: state.prompts,
+                cookies: state.cookiesData
+            });
+
             document.getElementById('btn-start').classList.add('hidden');
             document.getElementById('btn-stop').classList.remove('hidden');
         };
 
-        socket.on('automation-status', (res) => { 
-            if(res.showConfirm) {
-                document.getElementById('confirm-box').classList.remove('hidden');
-                document.getElementById('confirm-msg').textContent = res.msg;
-            }
+        socket.on('automation-status', (res) => {
+            document.getElementById('confirm-box').classList.remove('hidden');
+            document.getElementById('confirm-msg').textContent = res.msg;
         });
 
-        document.getElementById('btn-confirm').onclick = () => { 
-            socket.emit('confirm-start'); 
-            document.getElementById('confirm-box').classList.add('hidden'); 
+        document.getElementById('btn-confirm').onclick = () => {
+            socket.emit('confirm-start');
+            document.getElementById('confirm-box').classList.add('hidden');
         };
 
-        socket.on('log', (msg) => {
+        socket.on('log', (msg) => addLog(msg));
+
+        function addLog(msg) {
             const div = document.createElement('div');
-            if (msg.includes('ERRO')) div.className = 'text-red-400 font-bold';
-            if (msg.includes('Sucesso')) div.className = 'text-blue-400';
             div.textContent = `> ${msg}`;
-            const box = document.getElementById('logs'); 
+            const box = document.getElementById('logs');
             box.prepend(div);
-        });
+        }
 
         socket.on('new-images', (data) => {
             const container = document.getElementById('results');
             const section = document.createElement('div');
-            section.innerHTML = `<h2 class="text-xs font-bold text-slate-500 mb-2">Prompt #${data.index}</h2>
-                <div class="grid grid-cols-2 gap-2">${data.urls.map(u => `<img src="${u}" class="rounded-lg border border-slate-800">`).join('')}</div>`;
+            section.innerHTML = `<h2 class="text-xs font-bold text-slate-500">Prompt #${data.index}</h2>
+                <div class="grid grid-cols-2 gap-2">${data.urls.map(u => `<img src="${u}" class="rounded-lg">`).join('')}</div>`;
             container.prepend(section);
         });
 
-        document.getElementById('btn-stop').onclick = () => { socket.emit('stop-automation'); };
-        socket.on('automation-finished', (msg) => { alert(msg); location.reload(); });
-
-        window.onload = () => {
-            const raw = localStorage.getItem('saved_raw_prompts');
-            if(raw) {
-                document.getElementById('prompt-input').value = raw;
-                document.getElementById('prompt-input').dispatchEvent(new Event('input'));
-            }
-        }
+        document.getElementById('btn-stop').onclick = () => { socket.emit('stop-automation'); location.reload(); };
     </script>
 </body>
 </html>
