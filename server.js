@@ -28,7 +28,6 @@ let automationState = {
     capturedBlobs: []
 };
 
-// Função unificada para tirar print e enviar ao front
 async function sendScreenshot(socket, page, title) {
     if (page) {
         try {
@@ -71,19 +70,13 @@ io.on('connection', (socket) => {
                     const decodedCookies = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
                     let cookies = JSON.parse(decodedCookies);
                     
-                    // --- ATUALIZAÇÃO: CORREÇÃO E APLICAÇÃO DE COOKIES ---
-                    const formattedCookies = cookies.map(c => ({
-                        ...c,
-                        // Garante que o domínio comece com ponto se necessário para subdomínios
-                        domain: c.domain.startsWith('.') ? c.domain : (c.domain.includes('google') ? `.${c.domain}` : c.domain),
-                        secure: true
-                    }));
-
-                    await page.setCookie(...formattedCookies);
-                    socket.emit('log', `✅ Cookies mestres aplicados e normalizados (${formattedCookies.length}).`);
-                    // ---------------------------------------------------
+                    // Normalização para garantir que o Puppeteer aceite os cookies
+                    if (!Array.isArray(cookies)) cookies = [cookies];
+                    
+                    await page.setCookie(...cookies);
+                    socket.emit('log', `✅ Cookies injetados (${cookies.length}).`);
                 } catch (e) {
-                    socket.emit('log', '❌ ERRO NOS COOKIES: JSON Inválido.');
+                    socket.emit('log', '❌ ERRO NOS COOKIES: Formato inválido.');
                     if (browser) await browser.close();
                     return;
                 }
@@ -97,7 +90,6 @@ io.on('connection', (socket) => {
             
             try {
                 await page.goto(data.link, { waitUntil: 'networkidle2' });
-                // Tira print da tela carregada para o usuário confirmar
                 await sendScreenshot(socket, page, "Página Carregada");
             } catch (navError) {
                 socket.emit('log', `❌ ERRO DE NAVEGAÇÃO: ${navError.message}`);
@@ -108,7 +100,7 @@ io.on('connection', (socket) => {
 
             const currentUrl = page.url();
             if (currentUrl.includes('accounts.google.com') || currentUrl.includes('login')) {
-                socket.emit('log', '⚠️ BLOQUEIO: Google pediu login. Cookies podem estar expirados.');
+                socket.emit('log', '⚠️ BLOQUEIO: Google pediu login.');
                 await sendScreenshot(socket, page, "Bloqueio de Login");
                 if (browser) await browser.close();
                 return;
@@ -118,6 +110,9 @@ io.on('connection', (socket) => {
                 msg: "Ambiente pronto! Veja o print abaixo.", 
                 showConfirm: true 
             });
+
+            // Guardar assets para uso no confirm-start
+            automationState.assets = data.assets || [];
 
         } catch (err) {
             socket.emit('log', `ERRO GERAL: ${err.message}`);
@@ -130,7 +125,6 @@ io.on('connection', (socket) => {
         if (!page) return;
         socket.emit('log', 'Iniciando loop de automação no navegador...');
 
-        // Evento para capturar logs do console do navegador (incluindo erros)
         page.on('console', msg => {
             const text = msg.text();
             if (text.startsWith('[FLOW_LOG]')) {
@@ -145,6 +139,7 @@ io.on('connection', (socket) => {
         });
 
         try {
+            // Injeta os assets no localStorage do navegador controlado
             await page.evaluate(async (promptsList, assetsData) => {
                 try {
                     window.state = {
@@ -285,7 +280,7 @@ io.on('connection', (socket) => {
                 } catch (e) {
                     console.log("[FLOW_LOG]|error|ERRO INTERNO JS: " + e.message);
                 }
-            }, automationState.prompts, []);
+            }, automationState.prompts, automationState.assets);
         } catch (err) {
             socket.emit('log', 'ERRO AO EXECUTAR JS: ' + err.message);
         }
