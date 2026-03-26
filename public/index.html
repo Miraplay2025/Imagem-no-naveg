@@ -10,7 +10,6 @@
         body { background: #020617; color: #e2e8f0; font-family: sans-serif; }
         .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; }
         .log-box { font-size: 11px; max-height: 200px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; border: 1px solid #333; }
-        .btn-start { background: #3b82f6; width: 100%; padding: 1rem; border-radius: 12px; font-weight: bold; }
     </style>
 </head>
 <body class="p-4 flex flex-col items-center">
@@ -19,48 +18,42 @@
 
         <input id="flow-url" type="text" placeholder="Link do Flow" class="w-full p-4 mobile-field outline-none">
         
-        <div class="flex flex-col gap-2">
-            <label id="cookie-label" class="p-4 text-center mobile-field cursor-pointer text-sm bg-slate-800 border-dashed border-2">
-                📂 Upload Cookies (.json)
-                <input type="file" id="cookies-file" class="hidden" accept=".json">
-            </label>
-            <div id="cookie-info" class="hidden text-center text-green-400 text-xs">✅ Cookies Selecionados</div>
-        </div>
+        <label id="cookie-label" class="block w-full p-4 text-center mobile-field cursor-pointer text-sm bg-slate-800 border-dashed border-2">
+            📂 Carregar Cookies (.json)
+            <input type="file" id="cookies-file" class="hidden" accept=".json">
+        </label>
+        <div id="cookie-info" class="hidden text-center text-green-400 text-[10px]">✅ Pronto (Codificado em Base64)</div>
 
         <textarea id="prompt-input" class="w-full p-4 mobile-field h-40 outline-none" placeholder="Prompt 1...&#10;Prompt 2..."></textarea>
         
-        <div id="awu-count" class="text-right text-xs text-slate-500">0 prompts</div>
-
-        <button id="btn-start" class="btn-start">Iniciar Automação</button>
-        <button id="btn-stop" class="hidden w-full p-4 bg-red-600 rounded-xl font-bold">Parar Tudo</button>
+        <button id="btn-start" class="w-full p-4 bg-blue-600 rounded-xl font-bold">Iniciar Automação</button>
+        <button id="btn-stop" class="hidden w-full p-4 bg-red-600 rounded-xl font-bold">Parar</button>
 
         <div id="confirm-box" class="hidden p-4 bg-green-900/50 border border-green-500 rounded-xl text-center space-y-2">
-            <p id="confirm-msg" class="text-sm font-semibold">Página Carregada!</p>
+            <p id="confirm-msg" class="text-sm">Aguardando confirmação...</p>
             <button id="btn-confirm" class="w-full p-2 bg-green-500 text-black font-bold rounded-lg">Confirmar e Rodar</button>
         </div>
 
         <div id="logs" class="log-box"></div>
-        <div id="results" class="space-y-4"></div>
+        <div id="results" class="space-y-4 pb-10"></div>
     </div>
 
     <script>
         const socket = io();
-        const state = { prompts: [], assets: [], cookiesData: null };
+        let cookiesBase64 = null;
+        const state = { prompts: [], assets: [] };
 
-        // Log de conexão para depurar no celular
-        socket.on('connect', () => {
-            addLog("Conectado ao servidor via Socket.");
-        });
-
-        // Leitura de Cookies com tratamento de erro
+        // Converte o arquivo para Base64 assim que selecionado
         document.getElementById('cookies-file').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (file) {
                 const reader = new FileReader();
                 reader.onload = (event) => {
-                    state.cookiesData = event.target.result;
+                    const text = event.target.result;
+                    // Converte string para Base64 (suporta caracteres especiais)
+                    cookiesBase64 = btoa(unescape(encodeURIComponent(text.trim())));
                     document.getElementById('cookie-info').classList.remove('hidden');
-                    addLog("Cookies carregados na memória.");
+                    addLog("Arquivo de cookies codificado com sucesso.");
                 };
                 reader.readAsText(file);
             }
@@ -69,20 +62,14 @@
         document.getElementById('prompt-input').addEventListener('input', (e) => {
             const rawMatches = e.target.value.split(/\bPrompt\b/i).slice(1);
             state.prompts = rawMatches.map(text => text.replace(/^[\s\d:.-]+/, "").trim()).filter(Boolean);
-            document.getElementById("awu-count").textContent = `${state.prompts.length} prompts`;
         });
 
         document.getElementById('btn-start').onclick = () => {
-            const url = document.getElementById('flow-url').value;
-            if (!url) return alert("Insira o link!");
-
-            addLog("Enviando solicitação de início...");
             socket.emit('start-automation', {
-                link: url,
+                link: document.getElementById('flow-url').value,
                 prompts: state.prompts,
-                cookies: state.cookiesData
+                cookiesBase64: cookiesBase64
             });
-
             document.getElementById('btn-start').classList.add('hidden');
             document.getElementById('btn-stop').classList.remove('hidden');
         };
@@ -102,16 +89,13 @@
         function addLog(msg) {
             const div = document.createElement('div');
             div.textContent = `> ${msg}`;
-            const box = document.getElementById('logs');
-            box.prepend(div);
+            document.getElementById('logs').prepend(div);
         }
 
         socket.on('new-images', (data) => {
-            const container = document.getElementById('results');
             const section = document.createElement('div');
-            section.innerHTML = `<h2 class="text-xs font-bold text-slate-500">Prompt #${data.index}</h2>
-                <div class="grid grid-cols-2 gap-2">${data.urls.map(u => `<img src="${u}" class="rounded-lg">`).join('')}</div>`;
-            container.prepend(section);
+            section.innerHTML = `<h2 class="text-[10px]">#${data.index}</h2><div class="grid grid-cols-2 gap-2">${data.urls.map(u => `<img src="${u}" class="rounded">`).join('')}</div>`;
+            document.getElementById('results').prepend(section);
         });
 
         document.getElementById('btn-stop').onclick = () => { socket.emit('stop-automation'); location.reload(); };
