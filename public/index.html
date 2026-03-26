@@ -13,8 +13,8 @@
         .prompt-textarea { height: 40vh; resize: none; font-family: monospace; }
         .btn-primary { background: #3b82f6; transition: all 0.2s; }
         .btn-primary:active { transform: scale(0.98); }
-        .log-box { font-size: 11px; max-height: 200px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; border: 1px solid #333; }
-        .success-badge { background: #059669; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; margin-top: 5px; display: inline-block; }
+        .log-box { font-size: 11px; max-height: 180px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; border: 1px solid #333; }
+        .status-badge { background: #10b981; color: #000; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 4px; margin-top: 5px; display: inline-block; }
     </style>
 </head>
 <body class="p-4 flex flex-col items-center">
@@ -24,12 +24,12 @@
         <div class="space-y-3">
             <input id="flow-url" type="text" placeholder="Cole o link do Flow aqui" class="w-full p-4 mobile-field outline-none focus:ring-2 ring-blue-500">
             
-            <div class="flex flex-col gap-1">
-                <label id="cookie-label" class="flex-1 p-3 text-center mobile-field cursor-pointer text-sm bg-slate-800">
-                    📂 Cookies Flox
+            <div class="flex flex-col">
+                <label id="cookie-label" class="w-full p-4 text-center mobile-field cursor-pointer text-sm bg-slate-800 border-dashed border-2 border-slate-700">
+                    📂 Selecionar arquivo de Cookies (.json)
                     <input type="file" id="cookies-file" class="hidden" accept=".json">
                 </label>
-                <div id="cookie-status" class="hidden"><span class="success-badge">✅ Cookies carregados!</span></div>
+                <div id="cookie-info" class="hidden text-center"><span class="status-badge">✅ ARQUIVO CARREGADO</span></div>
             </div>
         </div>
 
@@ -43,18 +43,18 @@
 
         <div>
             <input type="file" id="asset-upload" multiple class="hidden">
-            <button onclick="document.getElementById('asset-upload').click()" class="w-full p-3 mobile-field bg-slate-800 text-sm">Adicionar Referências</button>
+            <button onclick="document.getElementById('asset-upload').click()" class="w-full p-3 mobile-field bg-slate-800 text-sm">Adicionar Referências (Fotos)</button>
             <div id="assets-container" class="grid grid-cols-3 gap-2 mt-2"></div>
         </div>
 
         <div class="flex gap-2" id="control-panel">
             <button id="btn-start" class="flex-1 p-4 btn-primary rounded-2xl font-bold">Iniciar Automação</button>
-            <button id="btn-stop" class="hidden p-4 bg-red-600 rounded-2xl font-bold">Parar</button>
+            <button id="btn-stop" class="hidden p-4 bg-red-600 rounded-2xl font-bold">Parar Tudo</button>
         </div>
 
         <div id="confirm-box" class="hidden p-4 bg-green-900/50 border border-green-500 rounded-xl text-center space-y-2">
-            <p id="status-msg" class="text-sm font-semibold">Aguardando Verificação...</p>
-            <button id="btn-confirm" class="w-full p-2 bg-green-500 text-black font-bold rounded-lg">Confirmar</button>
+            <p id="confirm-msg" class="text-sm font-semibold text-green-300">Página pronta para começar!</p>
+            <button id="btn-confirm" class="w-full p-2 bg-green-500 text-black font-bold rounded-lg">Confirmar e Rodar</button>
         </div>
 
         <div id="logs" class="log-box"></div>
@@ -65,11 +65,11 @@
         const socket = io();
         const state = { prompts: [], assets: [] };
 
-        // Feedback visual do upload de cookies
+        // Feedback de Cookies
         document.getElementById('cookies-file').addEventListener('change', function(e) {
-            if (this.files && this.files[0]) {
-                document.getElementById('cookie-status').classList.remove('hidden');
-                document.getElementById('cookie-label').classList.add('border-green-500');
+            if (this.files[0]) {
+                document.getElementById('cookie-info').classList.remove('hidden');
+                document.getElementById('cookie-label').textContent = "📄 " + this.files[0].name;
             }
         });
 
@@ -128,7 +128,7 @@
         socket.on('automation-status', (res) => { 
             if(res.showConfirm) {
                 document.getElementById('confirm-box').classList.remove('hidden');
-                document.getElementById('status-msg').textContent = res.msg;
+                document.getElementById('confirm-msg').textContent = res.msg;
             }
         });
 
@@ -138,8 +138,9 @@
         };
 
         socket.on('log', (msg) => {
-            const div = document.createElement('div'); 
-            div.className = msg.includes('ERRO') ? 'text-red-400' : (msg.includes('Sucesso') ? 'text-blue-400' : '');
+            const div = document.createElement('div');
+            if (msg.includes('ERRO')) div.className = 'text-red-400 font-bold';
+            if (msg.includes('Sucesso')) div.className = 'text-blue-400';
             div.textContent = `> ${msg}`;
             const box = document.getElementById('logs'); 
             box.prepend(div);
