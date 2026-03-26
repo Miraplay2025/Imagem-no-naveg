@@ -52,17 +52,11 @@ io.on('connection', (socket) => {
             
             browser = await puppeteer.launch({
                 headless: "new",
-                args: [
-                    '--no-sandbox', 
-                    '--disable-setuid-sandbox', 
-                    '--disable-dev-shm-usage', 
-                    '--window-size=1280,800'
-                ]
+                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--window-size=1280,800']
             });
 
             page = await browser.newPage();
-            
-            // AUMENTO DE TIMEOUT PARA 90 SEGUNDOS
+            // Aumento de timeout conforme solicitado
             page.setDefaultNavigationTimeout(90000); 
             page.setDefaultTimeout(90000);
 
@@ -83,23 +77,18 @@ io.on('connection', (socket) => {
             automationState.prompts = data.prompts;
             automationState.assets = data.assets || [];
             
-            socket.emit('log', 'Carregando página do Flow...');
-            
             try {
-                // Tenta carregar a página
                 await page.goto(data.link, { waitUntil: 'networkidle2' });
                 await sendScreenshot(socket, page, "Página Carregada - Confirme o Início");
                 socket.emit('automation-status', { msg: "Página pronta!", showConfirm: true });
             } catch (navError) {
-                // Se der timeout ou erro de navegação, tira print do erro
                 socket.emit('log', `Erro de Navegação: ${navError.message}`);
-                await sendScreenshot(socket, page, "Erro no Carregamento da Página");
-                throw navError; 
+                await sendScreenshot(socket, page, "Erro no Carregamento");
+                throw navError;
             }
 
         } catch (err) {
             socket.emit('log', `ERRO: ${err.message}`);
-            // O print já é disparado no catch de navegação acima se for o caso
         }
     });
 
@@ -123,26 +112,28 @@ io.on('connection', (socket) => {
 
         try {
             await page.evaluate(async (promptsList, assetsData) => {
+                // ESTADO IMPORTADO DO CONTENT.JS
                 const state = {
-                    isRunning: true,
-                    stopRequested: false,
-                    currentIndex: 0,
                     prompts: promptsList,
+                    isRunning: true,
+                    currentIndex: 0,
+                    stopRequested: false,
                     initialUrls: new Set(),
-                    capturedBlobs: [],
+                    capturedBlobs: [], 
                     blockObserver: null
                 };
 
                 localStorage.setItem("flow_persistent_assets_v3", JSON.stringify(assetsData));
-                const wait = (ms) => new Promise(r => setTimeout(r, ms));
+                const wait = (ms) => new Promise(res => setTimeout(res, ms));
                 const log = (msg, type) => { console.log(`[FLOW_LOG]|${type}|${msg}`); };
 
+                // 3. BLOQUEIO DE TECLADO (IDÊNTICO À EXTENSÃO)
                 const KeyboardBlocker = {
                     injectStyle: () => {
                         if (document.getElementById('awu-block-style')) return;
                         const style = document.createElement('style');
                         style.id = 'awu-block-style';
-                        style.innerHTML = `input, textarea, [contenteditable="true"] { inputmode: none !important; pointer-events: none !important; } #awu-panel input, #awu-panel textarea, #awu-persistent-overlay * { pointer-events: auto !important; }`;
+                        style.innerHTML = `input, textarea, [contenteditable="true"] { inputmode: none !important; pointer-events: none !important; }`;
                         document.head.appendChild(style);
                     },
                     removeStyle: () => {
@@ -150,9 +141,7 @@ io.on('connection', (socket) => {
                         if (style) style.remove();
                     },
                     preventFocus: (e) => {
-                        if (state.isRunning && !e.target.closest('#awu-panel')) {
-                            e.preventDefault(); e.target.blur();
-                        }
+                        if (state.isRunning) { e.preventDefault(); e.target.blur(); }
                     },
                     startBlocking: () => {
                         KeyboardBlocker.injectStyle();
@@ -173,6 +162,7 @@ io.on('connection', (socket) => {
                     }
                 };
 
+                // 5. PERSISTÊNCIA (LÓGICA INJECTASSETS DO CONTENT.JS)
                 const PersistentManager = {
                     injectAssets: async (promptText, logCallback) => {
                         const assets = JSON.parse(localStorage.getItem("flow_persistent_assets_v3") || "[]");
@@ -198,14 +188,12 @@ io.on('connection', (socket) => {
                                     if(targetItem) break; await wait(600);
                                 }
                                 if (targetItem) { targetItem.click(); logCallback(`Referência "${item.nameNoExt}" ok.`, "success"); await wait(1200); }
-                            } catch (err) { 
-                                logCallback(`Erro Persistência: ${err.message}`, "error"); 
-                                await window.sendScreenshotToNode("Erro na Persistência");
-                            }
+                            } catch (err) { logCallback(`Erro Persistência: ${err.message}`, "error"); }
                         }
                     }
                 };
 
+                // MOTOR DE AUTOMAÇÃO (LÓGICA DO CONTENT.JS ADAPTADA)
                 async function processPrompts() {
                     log("Iniciando automação...", "success"); 
                     state.isRunning = true;
@@ -230,14 +218,13 @@ io.on('connection', (socket) => {
                             state.initialUrls = new Set(getUIStatus().imgs);
                             await PersistentManager.injectAssets(currentPrompt, log);
                             
+                            // Seleção de Input e Botão identica à extensão
                             const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
                             const btn = [...document.querySelectorAll("button, i")].find(e => e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward"));
                             
-                            if (!inputEl || !btn) { 
-                                log("Campo de texto ou botão não encontrado. Tentando novamente...", "warning");
-                                await wait(2000); continue; 
-                            }
+                            if (!inputEl || !btn) { await wait(2000); continue; }
                             
+                            // Inserção de texto usando execCommand (conforme extensão)
                             inputEl.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null);
                             await wait(300); 
                             const dt = new DataTransfer(); dt.setData('text/plain', currentPrompt);
@@ -248,24 +235,25 @@ io.on('connection', (socket) => {
                             await wait(500); 
                             btn.click();
 
-                            if (i === 0 && attempts === 1) {
-                                await window.sendScreenshotToNode("Iniciando Geração do Primeiro Prompt");
-                            }
+                            if (i === 0 && attempts === 1) await window.sendScreenshotToNode("Iniciando Primeiro Prompt");
 
+                            // Espera o início do processamento (lógica de 15 segundos da extensão)
                             let startedProcessing = false;
                             for (let att = 0; att < 15; att++) { 
                                 if (getUIStatus().processing) { startedProcessing = true; break; } 
                                 await wait(1000); 
                             }
                             
+                            // Espera o fim do processamento (lógica de 120 segundos da extensão)
                             let waitTimer = 0;
                             const MAX_WAIT = 120; 
                             while (!state.stopRequested && waitTimer < MAX_WAIT) {
                                 const status = getUIStatus(); 
                                 if (status.processing) { await wait(2000); waitTimer += 2; continue; }
                                 
-                                await wait(4000); 
+                                await wait(4000); // Pausa de confirmação da extensão
                                 const finalStatus = getUIStatus();
+                                // Filtra novas imagens comparando com o Set inicial
                                 const newImages = finalStatus.imgs.filter(url => !state.initialUrls.has(url));
                                 
                                 if (newImages.length >= 2) {
@@ -293,16 +281,17 @@ io.on('connection', (socket) => {
                     KeyboardBlocker.stopBlocking(); state.isRunning = false;
                 }
 
+                // Disparo inicial
                 try {
                     await processPrompts();
                 } catch (e) {
                     log("ERRO FATAL: " + e.message, "error");
-                    await window.sendScreenshotToNode("Erro Fatal na Automação");
+                    await window.sendScreenshotToNode("Erro Fatal");
                 }
 
             }, automationState.prompts, automationState.assets);
         } catch (err) {
-            socket.emit('log', 'ERRO AO EXECUTAR JS: ' + err.message);
+            socket.emit('log', 'ERRO JS: ' + err.message);
         }
     });
 
@@ -310,10 +299,10 @@ io.on('connection', (socket) => {
         if (browser) {
             await browser.close();
             browser = null; page = null;
-            socket.emit('log', 'Automação parada pelo usuário.');
+            socket.emit('log', 'Robô finalizado.');
         }
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+server.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
