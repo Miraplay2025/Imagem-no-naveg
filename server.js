@@ -25,10 +25,7 @@ io.on('connection', (socket) => {
 
     socket.on('start-automation', async (data) => {
         try {
-            // Feedback dos dados recebidos
-            socket.emit('log', `Dados recebidos: ${data.prompts.length} prompts e ${data.assets?.length || 0} referências.`);
-            if (data.cookies) socket.emit('log', 'Arquivo de cookies detectado.');
-
+            socket.emit('log', `Dados recebidos: ${data.prompts.length} prompts.`);
             socket.emit('log', 'Iniciando navegador no Render...');
             
             browser = await puppeteer.launch({
@@ -46,12 +43,16 @@ io.on('connection', (socket) => {
             
             if (data.cookies) {
                 try {
-                    const cookies = JSON.parse(data.cookies);
+                    // Limpa o texto para evitar o erro "Unexpected end of JSON input"
+                    const cleanCookiesText = data.cookies.trim();
+                    const cookies = JSON.parse(cleanCookiesText);
                     await page.setCookie(...cookies);
-                    socket.emit('log', `Sucesso: ${cookies.length} cookies injetados no navegador.`);
+                    socket.emit('log', `Sucesso: ${cookies.length} cookies injetados.`);
                 } catch (e) {
                     socket.emit('log', 'ERRO CRÍTICO NOS COOKIES: ' + e.message);
-                    throw new Error("Formato de cookies inválido. Use JSON.");
+                    socket.emit('log', 'CONTEÚDO RECEBIDO: ' + data.cookies.substring(0, 50) + "...");
+                    if (browser) await browser.close();
+                    return;
                 }
             }
 
@@ -60,26 +61,22 @@ io.on('connection', (socket) => {
             automationState.stopRequested = false;
 
             socket.emit('log', 'Acessando Flow...');
-            const response = await page.goto(data.link, { waitUntil: 'networkidle2', timeout: 60000 });
+            await page.goto(data.link, { waitUntil: 'networkidle2', timeout: 60000 });
 
-            // VERIFICAÇÃO DE LOGIN / REDIRECIONAMENTO
+            // Verificação de Redirecionamento (Login Google)
             const currentUrl = page.url();
-            socket.emit('log', `URL Atual: ${currentUrl}`);
-
             if (currentUrl.includes('accounts.google.com') || currentUrl.includes('login')) {
-                socket.emit('log', 'ALERTA: Redirecionado para página de Login. Os cookies falharam ou expiraram.');
-                await browser.close();
-                return socket.emit('log', 'ERRO: Sessão não autorizada. Verifique seus cookies.');
+                socket.emit('log', '⚠️ ERRO: Redirecionado para Login. Seus cookies expiraram.');
+                if (browser) await browser.close();
+                return;
             }
 
             socket.emit('automation-status', { 
-                msg: "Login verificado e página carregada com sucesso!", 
+                msg: "Login verificado com sucesso!", 
                 showConfirm: true 
             });
 
         } catch (err) {
-            // Retorna o erro real para depuração
-            console.error(err);
             socket.emit('log', `ERRO DE DEPURAÇÃO: ${err.stack || err.message}`);
         }
     });
@@ -240,9 +237,8 @@ io.on('connection', (socket) => {
     });
 
     socket.on('stop-automation', async () => {
-        if (page) {
-            await page.evaluate(() => { window.state.stopRequested = true; });
-            socket.emit('log', 'Parando automação...');
+        if (browser) {
+            socket.emit('log', 'Encerrando navegador...');
             await browser.close();
             browser = null; page = null;
             socket.emit('automation-finished', 'Processo finalizado.');
