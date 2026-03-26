@@ -3,15 +3,15 @@ const http = require('http');
 const { Server } = require('socket.io');
 const puppeteer = require('puppeteer');
 const path = require('path');
-const cors = require('cors'); // Autorização para requisições externas
+const cors = require('cors');
 
 const app = express();
-app.use(cors()); // Habilita CORS para todas as rotas
+app.use(cors());
 
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: "*", // Permite conexões de qualquer origem
+        origin: "*",
         methods: ["GET", "POST"]
     }
 });
@@ -30,15 +30,10 @@ let automationState = {
 
 io.on('connection', (socket) => {
     console.log('Cliente conectado via Socket');
-    socket.emit('log', 'Conectado ao servidor com sucesso.');
 
     socket.on('start-automation', async (data) => {
         try {
-            if (!data.link || data.prompts.length === 0) {
-                return socket.emit('log', 'ERRO: Link ou Prompts ausentes.');
-            }
-
-            socket.emit('log', `Iniciando: ${data.prompts.length} prompts detectados.`);
+            socket.emit('log', `Iniciando processo para ${data.prompts.length} prompts.`);
             
             browser = await puppeteer.launch({
                 headless: "new",
@@ -52,18 +47,17 @@ io.on('connection', (socket) => {
             });
 
             page = await browser.newPage();
-            
-            // Configura timeout longo para conexões lentas
             await page.setDefaultNavigationTimeout(90000);
 
-            if (data.cookies) {
+            if (data.cookiesBase64) {
                 try {
-                    const cleanCookiesText = data.cookies.trim();
-                    const cookies = JSON.parse(cleanCookiesText);
+                    // Decodifica de Base64 para String UTF-8
+                    const decodedCookies = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
+                    const cookies = JSON.parse(decodedCookies);
                     await page.setCookie(...cookies);
-                    socket.emit('log', `✅ ${cookies.length} cookies injetados com sucesso.`);
+                    socket.emit('log', `✅ Cookies decodificados e aplicados (${cookies.length}).`);
                 } catch (e) {
-                    socket.emit('log', '❌ ERRO NOS COOKIES: JSON inválido ou malformatado.');
+                    socket.emit('log', '❌ ERRO NA DECODIFICAÇÃO: O arquivo Base64 é inválido.');
                     if (browser) await browser.close();
                     return;
                 }
@@ -73,32 +67,30 @@ io.on('connection', (socket) => {
             automationState.currentIndex = 0;
             automationState.stopRequested = false;
 
-            socket.emit('log', 'Abrindo página do Flow...');
+            socket.emit('log', 'Acessando Flow...');
             await page.goto(data.link, { waitUntil: 'networkidle2' });
 
             const currentUrl = page.url();
-            socket.emit('log', `URL Atual: ${currentUrl}`);
-
             if (currentUrl.includes('accounts.google.com') || currentUrl.includes('login')) {
-                socket.emit('log', '⚠️ REDIRECIONADO PARA LOGIN: Seus cookies não funcionaram ou expiraram.');
+                socket.emit('log', '⚠️ SESSÃO INVÁLIDA: Redirecionado para Login.');
                 if (browser) await browser.close();
                 return;
             }
 
             socket.emit('automation-status', { 
-                msg: "Ambiente verificado e pronto!", 
+                msg: "Conectado e validado!", 
                 showConfirm: true 
             });
 
         } catch (err) {
-            socket.emit('log', `ERRO CRÍTICO: ${err.message}`);
+            socket.emit('log', `ERRO: ${err.message}`);
             if (browser) await browser.close();
         }
     });
 
     socket.on('confirm-start', async () => {
         if (!page) return;
-        socket.emit('log', 'Robô injetado. Iniciando processamento...');
+        socket.emit('log', 'Iniciando loop de automação...');
 
         await page.evaluate(async (promptsList, assetsData) => {
             window.state = {
@@ -253,13 +245,12 @@ io.on('connection', (socket) => {
 
     socket.on('stop-automation', async () => {
         if (browser) {
-            socket.emit('log', 'Encerrando navegador...');
             await browser.close();
             browser = null; page = null;
-            socket.emit('automation-finished', 'Processo finalizado.');
+            socket.emit('automation-finished', 'Finalizado.');
         }
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+server.listen(PORT, () => console.log(`Servidor na porta ${PORT}`));
