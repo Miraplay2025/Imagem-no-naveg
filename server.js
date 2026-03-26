@@ -3,10 +3,18 @@ const http = require('http');
 const { Server } = require('socket.io');
 const puppeteer = require('puppeteer');
 const path = require('path');
+const cors = require('cors'); // Autorização para requisições externas
 
 const app = express();
+app.use(cors()); // Habilita CORS para todas as rotas
+
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+    cors: {
+        origin: "*", // Permite conexões de qualquer origem
+        methods: ["GET", "POST"]
+    }
+});
 
 app.use(express.static('public'));
 
@@ -22,11 +30,15 @@ let automationState = {
 
 io.on('connection', (socket) => {
     console.log('Cliente conectado via Socket');
+    socket.emit('log', 'Conectado ao servidor com sucesso.');
 
     socket.on('start-automation', async (data) => {
         try {
-            socket.emit('log', `Dados recebidos: ${data.prompts.length} prompts.`);
-            socket.emit('log', 'Iniciando navegador no Render...');
+            if (!data.link || data.prompts.length === 0) {
+                return socket.emit('log', 'ERRO: Link ou Prompts ausentes.');
+            }
+
+            socket.emit('log', `Iniciando: ${data.prompts.length} prompts detectados.`);
             
             browser = await puppeteer.launch({
                 headless: "new",
@@ -41,16 +53,17 @@ io.on('connection', (socket) => {
 
             page = await browser.newPage();
             
+            // Configura timeout longo para conexões lentas
+            await page.setDefaultNavigationTimeout(90000);
+
             if (data.cookies) {
                 try {
-                    // Limpa o texto para evitar o erro "Unexpected end of JSON input"
                     const cleanCookiesText = data.cookies.trim();
                     const cookies = JSON.parse(cleanCookiesText);
                     await page.setCookie(...cookies);
-                    socket.emit('log', `Sucesso: ${cookies.length} cookies injetados.`);
+                    socket.emit('log', `✅ ${cookies.length} cookies injetados com sucesso.`);
                 } catch (e) {
-                    socket.emit('log', 'ERRO CRÍTICO NOS COOKIES: ' + e.message);
-                    socket.emit('log', 'CONTEÚDO RECEBIDO: ' + data.cookies.substring(0, 50) + "...");
+                    socket.emit('log', '❌ ERRO NOS COOKIES: JSON inválido ou malformatado.');
                     if (browser) await browser.close();
                     return;
                 }
@@ -60,30 +73,32 @@ io.on('connection', (socket) => {
             automationState.currentIndex = 0;
             automationState.stopRequested = false;
 
-            socket.emit('log', 'Acessando Flow...');
-            await page.goto(data.link, { waitUntil: 'networkidle2', timeout: 60000 });
+            socket.emit('log', 'Abrindo página do Flow...');
+            await page.goto(data.link, { waitUntil: 'networkidle2' });
 
-            // Verificação de Redirecionamento (Login Google)
             const currentUrl = page.url();
+            socket.emit('log', `URL Atual: ${currentUrl}`);
+
             if (currentUrl.includes('accounts.google.com') || currentUrl.includes('login')) {
-                socket.emit('log', '⚠️ ERRO: Redirecionado para Login. Seus cookies expiraram.');
+                socket.emit('log', '⚠️ REDIRECIONADO PARA LOGIN: Seus cookies não funcionaram ou expiraram.');
                 if (browser) await browser.close();
                 return;
             }
 
             socket.emit('automation-status', { 
-                msg: "Login verificado com sucesso!", 
+                msg: "Ambiente verificado e pronto!", 
                 showConfirm: true 
             });
 
         } catch (err) {
-            socket.emit('log', `ERRO DE DEPURAÇÃO: ${err.stack || err.message}`);
+            socket.emit('log', `ERRO CRÍTICO: ${err.message}`);
+            if (browser) await browser.close();
         }
     });
 
     socket.on('confirm-start', async () => {
         if (!page) return;
-        socket.emit('log', 'Iniciando loop de automação...');
+        socket.emit('log', 'Robô injetado. Iniciando processamento...');
 
         await page.evaluate(async (promptsList, assetsData) => {
             window.state = {
