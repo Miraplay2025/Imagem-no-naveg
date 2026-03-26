@@ -52,10 +52,20 @@ io.on('connection', (socket) => {
             
             browser = await puppeteer.launch({
                 headless: "new",
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--window-size=1280,800']
+                args: [
+                    '--no-sandbox', 
+                    '--disable-setuid-sandbox', 
+                    '--disable-dev-shm-usage', 
+                    '--window-size=1280,800'
+                ]
             });
 
             page = await browser.newPage();
+            
+            // AUMENTO DE TIMEOUT PARA 90 SEGUNDOS
+            page.setDefaultNavigationTimeout(90000); 
+            page.setDefaultTimeout(90000);
+
             await page.setViewport({ width: 1280, height: 800 });
 
             if (data.cookiesBase64) {
@@ -73,26 +83,33 @@ io.on('connection', (socket) => {
             automationState.prompts = data.prompts;
             automationState.assets = data.assets || [];
             
-            await page.goto(data.link, { waitUntil: 'networkidle2' });
-            await sendScreenshot(socket, page, "Página Carregada - Confirme o Início");
-
-            socket.emit('automation-status', { msg: "Página pronta!", showConfirm: true });
+            socket.emit('log', 'Carregando página do Flow...');
+            
+            try {
+                // Tenta carregar a página
+                await page.goto(data.link, { waitUntil: 'networkidle2' });
+                await sendScreenshot(socket, page, "Página Carregada - Confirme o Início");
+                socket.emit('automation-status', { msg: "Página pronta!", showConfirm: true });
+            } catch (navError) {
+                // Se der timeout ou erro de navegação, tira print do erro
+                socket.emit('log', `Erro de Navegação: ${navError.message}`);
+                await sendScreenshot(socket, page, "Erro no Carregamento da Página");
+                throw navError; 
+            }
 
         } catch (err) {
             socket.emit('log', `ERRO: ${err.message}`);
-            await sendScreenshot(socket, page, "Erro no Início");
+            // O print já é disparado no catch de navegação acima se for o caso
         }
     });
 
     socket.on('confirm-start', async () => {
         if (!page) return;
 
-        // Exposição de funções do Node para o Browser
         await page.exposeFunction('sendScreenshotToNode', async (title) => {
             await sendScreenshot(socket, page, title);
         });
 
-        // Monitor de Console para logs e imagens
         page.on('console', msg => {
             const text = msg.text();
             if (text.startsWith('[FLOW_LOG]')) {
@@ -106,7 +123,6 @@ io.on('connection', (socket) => {
 
         try {
             await page.evaluate(async (promptsList, assetsData) => {
-                // Estado interno do Browser
                 const state = {
                     isRunning: true,
                     stopRequested: false,
@@ -121,9 +137,6 @@ io.on('connection', (socket) => {
                 const wait = (ms) => new Promise(r => setTimeout(r, ms));
                 const log = (msg, type) => { console.log(`[FLOW_LOG]|${type}|${msg}`); };
 
-                /* ==========================================================================
-                   3. BLOQUEIO DE TECLADO (Original)
-                   ========================================================================== */
                 const KeyboardBlocker = {
                     injectStyle: () => {
                         if (document.getElementById('awu-block-style')) return;
@@ -160,9 +173,6 @@ io.on('connection', (socket) => {
                     }
                 };
 
-                /* ==========================================================================
-                   INJECT ASSETS (Original)
-                   ========================================================================== */
                 const PersistentManager = {
                     injectAssets: async (promptText, logCallback) => {
                         const assets = JSON.parse(localStorage.getItem("flow_persistent_assets_v3") || "[]");
@@ -196,9 +206,6 @@ io.on('connection', (socket) => {
                     }
                 };
 
-                /* ==========================================================================
-                   PROCESS PROMPTS (Função Principal)
-                   ========================================================================== */
                 async function processPrompts() {
                     log("Iniciando automação...", "success"); 
                     state.isRunning = true;
@@ -241,7 +248,6 @@ io.on('connection', (socket) => {
                             await wait(500); 
                             btn.click();
 
-                            // Print apenas no início do primeiro prompt
                             if (i === 0 && attempts === 1) {
                                 await window.sendScreenshotToNode("Iniciando Geração do Primeiro Prompt");
                             }
@@ -287,7 +293,6 @@ io.on('connection', (socket) => {
                     KeyboardBlocker.stopBlocking(); state.isRunning = false;
                 }
 
-                // Início da execução
                 try {
                     await processPrompts();
                 } catch (e) {
