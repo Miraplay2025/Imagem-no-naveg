@@ -13,7 +13,8 @@
         .prompt-textarea { height: 40vh; resize: none; font-family: monospace; }
         .btn-primary { background: #3b82f6; transition: all 0.2s; }
         .btn-primary:active { transform: scale(0.98); }
-        .log-box { font-size: 11px; max-height: 150px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; }
+        .log-box { font-size: 11px; max-height: 200px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; border: 1px solid #333; }
+        .success-badge { background: #059669; color: white; padding: 2px 8px; border-radius: 4px; font-size: 10px; margin-top: 5px; display: inline-block; }
     </style>
 </head>
 <body class="p-4 flex flex-col items-center">
@@ -22,11 +23,13 @@
 
         <div class="space-y-3">
             <input id="flow-url" type="text" placeholder="Cole o link do Flow aqui" class="w-full p-4 mobile-field outline-none focus:ring-2 ring-blue-500">
-            <div class="flex gap-2">
-                <label class="flex-1 p-3 text-center mobile-field cursor-pointer text-sm bg-slate-800">
+            
+            <div class="flex flex-col gap-1">
+                <label id="cookie-label" class="flex-1 p-3 text-center mobile-field cursor-pointer text-sm bg-slate-800">
                     📂 Cookies Flox
-                    <input type="file" id="cookies-file" class="hidden">
+                    <input type="file" id="cookies-file" class="hidden" accept=".json">
                 </label>
+                <div id="cookie-status" class="hidden"><span class="success-badge">✅ Cookies carregados!</span></div>
             </div>
         </div>
 
@@ -50,7 +53,7 @@
         </div>
 
         <div id="confirm-box" class="hidden p-4 bg-green-900/50 border border-green-500 rounded-xl text-center space-y-2">
-            <p class="text-sm font-semibold">login realizado com sucesso , pagina carregada com sucesso</p>
+            <p id="status-msg" class="text-sm font-semibold">Aguardando Verificação...</p>
             <button id="btn-confirm" class="w-full p-2 bg-green-500 text-black font-bold rounded-lg">Confirmar</button>
         </div>
 
@@ -61,6 +64,14 @@
     <script>
         const socket = io();
         const state = { prompts: [], assets: [] };
+
+        // Feedback visual do upload de cookies
+        document.getElementById('cookies-file').addEventListener('change', function(e) {
+            if (this.files && this.files[0]) {
+                document.getElementById('cookie-status').classList.remove('hidden');
+                document.getElementById('cookie-label').classList.add('border-green-500');
+            }
+        });
 
         document.getElementById('prompt-input').addEventListener('input', (e) => {
             const rawMatches = e.target.value.split(/\bPrompt\b/i).slice(1);
@@ -94,21 +105,44 @@
 
         document.getElementById('btn-start').onclick = () => {
             const cookiesFile = document.getElementById('cookies-file').files[0];
-            const data = { link: document.getElementById('flow-url').value, prompts: state.prompts, assets: state.assets };
+            const data = { 
+                link: document.getElementById('flow-url').value, 
+                prompts: state.prompts, 
+                assets: state.assets 
+            };
+
             if(cookiesFile) {
                 const reader = new FileReader();
-                reader.onload = (e) => { data.cookies = e.target.result; socket.emit('start-automation', data); };
+                reader.onload = (e) => { 
+                    data.cookies = e.target.result; 
+                    socket.emit('start-automation', data); 
+                };
                 reader.readAsText(cookiesFile);
-            } else { socket.emit('start-automation', data); }
+            } else { 
+                socket.emit('start-automation', data); 
+            }
             document.getElementById('btn-start').classList.add('hidden');
             document.getElementById('btn-stop').classList.remove('hidden');
         };
 
-        socket.on('automation-status', (res) => { if(res.showConfirm) document.getElementById('confirm-box').classList.remove('hidden'); });
-        document.getElementById('btn-confirm').onclick = () => { socket.emit('confirm-start'); document.getElementById('confirm-box').classList.add('hidden'); };
+        socket.on('automation-status', (res) => { 
+            if(res.showConfirm) {
+                document.getElementById('confirm-box').classList.remove('hidden');
+                document.getElementById('status-msg').textContent = res.msg;
+            }
+        });
+
+        document.getElementById('btn-confirm').onclick = () => { 
+            socket.emit('confirm-start'); 
+            document.getElementById('confirm-box').classList.add('hidden'); 
+        };
+
         socket.on('log', (msg) => {
-            const div = document.createElement('div'); div.textContent = `> ${msg}`;
-            const box = document.getElementById('logs'); box.prepend(div);
+            const div = document.createElement('div'); 
+            div.className = msg.includes('ERRO') ? 'text-red-400' : (msg.includes('Sucesso') ? 'text-blue-400' : '');
+            div.textContent = `> ${msg}`;
+            const box = document.getElementById('logs'); 
+            box.prepend(div);
         });
 
         socket.on('new-images', (data) => {
