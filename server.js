@@ -28,7 +28,6 @@ let automationState = {
     assets: []
 };
 
-// Função para tirar print e enviar via socket
 async function sendScreenshot(socket, page, title) {
     if (page) {
         try {
@@ -56,7 +55,6 @@ io.on('connection', (socket) => {
             });
 
             page = await browser.newPage();
-            // Aumento de timeout conforme solicitado
             page.setDefaultNavigationTimeout(90000); 
             page.setDefaultTimeout(90000);
 
@@ -112,14 +110,12 @@ io.on('connection', (socket) => {
 
         try {
             await page.evaluate(async (promptsList, assetsData) => {
-                // ESTADO IMPORTADO DO CONTENT.JS
                 const state = {
                     prompts: promptsList,
                     isRunning: true,
                     currentIndex: 0,
                     stopRequested: false,
                     initialUrls: new Set(),
-                    capturedBlobs: [], 
                     blockObserver: null
                 };
 
@@ -127,7 +123,6 @@ io.on('connection', (socket) => {
                 const wait = (ms) => new Promise(res => setTimeout(res, ms));
                 const log = (msg, type) => { console.log(`[FLOW_LOG]|${type}|${msg}`); };
 
-                // 3. BLOQUEIO DE TECLADO (IDÊNTICO À EXTENSÃO)
                 const KeyboardBlocker = {
                     injectStyle: () => {
                         if (document.getElementById('awu-block-style')) return;
@@ -162,7 +157,6 @@ io.on('connection', (socket) => {
                     }
                 };
 
-                // 5. PERSISTÊNCIA (LÓGICA INJECTASSETS DO CONTENT.JS)
                 const PersistentManager = {
                     injectAssets: async (promptText, logCallback) => {
                         const assets = JSON.parse(localStorage.getItem("flow_persistent_assets_v3") || "[]");
@@ -193,14 +187,14 @@ io.on('connection', (socket) => {
                     }
                 };
 
-                // MOTOR DE AUTOMAÇÃO (LÓGICA DO CONTENT.JS ADAPTADA)
                 async function processPrompts() {
                     log("Iniciando automação...", "success"); 
                     state.isRunning = true;
                     KeyboardBlocker.startBlocking();
                     
                     const getUIStatus = () => {
-                        const processing = !!document.querySelector(".kAxcVK, .fTmHUY, .dukARQ, [class*='loading']");
+                        // Lista de seletores de carregamento extraídos da extensão
+                        const processing = !!document.querySelector(".kAxcVK, .fTmHUY, .dukARQ, [class*='loading'], [class*='Generating']");
                         const imgs = Array.from(document.querySelectorAll('img.sc-5923b123-1')).map(img => img.src);
                         return { processing, imgs };
                     };
@@ -218,13 +212,11 @@ io.on('connection', (socket) => {
                             state.initialUrls = new Set(getUIStatus().imgs);
                             await PersistentManager.injectAssets(currentPrompt, log);
                             
-                            // Seleção de Input e Botão identica à extensão
                             const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
                             const btn = [...document.querySelectorAll("button, i")].find(e => e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward"));
                             
                             if (!inputEl || !btn) { await wait(2000); continue; }
                             
-                            // Inserção de texto usando execCommand (conforme extensão)
                             inputEl.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null);
                             await wait(300); 
                             const dt = new DataTransfer(); dt.setData('text/plain', currentPrompt);
@@ -235,53 +227,58 @@ io.on('connection', (socket) => {
                             await wait(500); 
                             btn.click();
 
-                            if (i === 0 && attempts === 1) await window.sendScreenshotToNode("Iniciando Primeiro Prompt");
-
-                            // Espera o início do processamento (lógica de 15 segundos da extensão)
+                            // Espera o início do processamento
                             let startedProcessing = false;
                             for (let att = 0; att < 15; att++) { 
                                 if (getUIStatus().processing) { startedProcessing = true; break; } 
                                 await wait(1000); 
                             }
                             
-                            // Espera o fim do processamento (lógica de 120 segundos da extensão)
+                            // Espera o fim do processamento com lógica de segurança da extensão
                             let waitTimer = 0;
-                            const MAX_WAIT = 120; 
+                            const MAX_WAIT = 150; 
                             while (!state.stopRequested && waitTimer < MAX_WAIT) {
                                 const status = getUIStatus(); 
-                                if (status.processing) { await wait(2000); waitTimer += 2; continue; }
                                 
-                                await wait(4000); // Pausa de confirmação da extensão
-                                const finalStatus = getUIStatus();
-                                // Filtra novas imagens comparando com o Set inicial
-                                const newImages = finalStatus.imgs.filter(url => !state.initialUrls.has(url));
-                                
+                                // Se ainda estiver processando, continua esperando
+                                if (status.processing) { 
+                                    await wait(2000); 
+                                    waitTimer += 2; 
+                                    continue; 
+                                }
+
+                                // Se parou de "carregar", fazemos a verificação de imagens (Igual ao content.js)
+                                await wait(5000); // Pausa estratégica para renderização final
+                                const finalCheck = getUIStatus();
+                                const newImages = finalCheck.imgs.filter(url => !state.initialUrls.has(url));
+
+                                // Só considera finalizado se o carregamento sumiu E apareceram imagens novas (min 2)
                                 if (newImages.length >= 2) {
-                                    log(`Capturado: [${newImages.length}] imagens no prompt [${i+1}]`, "success");
+                                    log(`Renderizado com sucesso: [${newImages.length}] imagens.`, "success");
                                     console.log(`[IMAGES]|${i+1}|${JSON.stringify(newImages)}`);
-                                    promptResolved = true; state.currentIndex = i + 1; break;
-                                } else { 
-                                    if (attempts < MAX_ATTEMPTS) {
-                                        log(`Aguardando renderização final...`, "warning");
-                                        await wait(5000);
-                                        const recheck = getUIStatus();
-                                        if(recheck.imgs.filter(url => !state.initialUrls.has(url)).length >= 2) continue;
-                                        log(`Reiniciando prompt [${i+1}]...`, "warning"); 
-                                    } else {
-                                        log(`Falha no prompt [${i+1}].`, "error");
-                                        await window.sendScreenshotToNode(`Falha no Prompt ${i+1}`);
-                                        state.currentIndex = i + 1; promptResolved = true;
-                                    }
-                                    break; 
+                                    promptResolved = true; 
+                                    state.currentIndex = i + 1; 
+                                    break;
+                                } else {
+                                    // Se o carregamento sumiu mas não há imagens, espera mais um pouco
+                                    log(`Aguardando exibição das imagens...`, "warning");
+                                    await wait(5000);
+                                    waitTimer += 5;
                                 }
                             }
+
+                            if (!promptResolved && attempts === MAX_ATTEMPTS) {
+                                log(`Timeout ou erro no prompt [${i+1}]. Pulando...`, "error");
+                                state.currentIndex = i + 1;
+                                promptResolved = true;
+                            }
                         }
+                        await wait(2000); // Intervalo entre prompts
                     }
                     if (!state.stopRequested) log("Fim da automação!", "success");
                     KeyboardBlocker.stopBlocking(); state.isRunning = false;
                 }
 
-                // Disparo inicial
                 try {
                     await processPrompts();
                 } catch (e) {
