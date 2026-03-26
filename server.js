@@ -69,9 +69,19 @@ io.on('connection', (socket) => {
             if (data.cookiesBase64) {
                 try {
                     const decodedCookies = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
-                    const cookies = JSON.parse(decodedCookies);
-                    await page.setCookie(...cookies);
-                    socket.emit('log', `✅ Cookies injetados (${cookies.length}).`);
+                    let cookies = JSON.parse(decodedCookies);
+                    
+                    // --- ATUALIZAÇÃO: CORREÇÃO E APLICAÇÃO DE COOKIES ---
+                    const formattedCookies = cookies.map(c => ({
+                        ...c,
+                        // Garante que o domínio comece com ponto se necessário para subdomínios
+                        domain: c.domain.startsWith('.') ? c.domain : (c.domain.includes('google') ? `.${c.domain}` : c.domain),
+                        secure: true
+                    }));
+
+                    await page.setCookie(...formattedCookies);
+                    socket.emit('log', `✅ Cookies mestres aplicados e normalizados (${formattedCookies.length}).`);
+                    // ---------------------------------------------------
                 } catch (e) {
                     socket.emit('log', '❌ ERRO NOS COOKIES: JSON Inválido.');
                     if (browser) await browser.close();
@@ -98,7 +108,7 @@ io.on('connection', (socket) => {
 
             const currentUrl = page.url();
             if (currentUrl.includes('accounts.google.com') || currentUrl.includes('login')) {
-                socket.emit('log', '⚠️ BLOQUEIO: Google pediu login.');
+                socket.emit('log', '⚠️ BLOQUEIO: Google pediu login. Cookies podem estar expirados.');
                 await sendScreenshot(socket, page, "Bloqueio de Login");
                 if (browser) await browser.close();
                 return;
@@ -151,7 +161,6 @@ io.on('connection', (socket) => {
                     const wait = (ms) => new Promise(r => setTimeout(r, ms));
                     const log = (msg, type) => { console.log(`[FLOW_LOG]|${type}|${msg}`); };
 
-                    // ... (KeyboardBlocker e PersistentManager mantidos iguais à original) ...
                     const KeyboardBlocker = {
                         injectStyle: () => {
                             if (document.getElementById('awu-block-style')) return;
