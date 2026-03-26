@@ -9,57 +9,55 @@
     <style>
         body { background: #020617; color: #e2e8f0; font-family: sans-serif; }
         .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; }
-        .log-box { font-size: 11px; max-height: 200px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; border: 1px solid #333; }
-        .error-overlay { background: rgba(0,0,0,0.9); border: 2px solid #ef4444; }
+        .log-box { font-size: 10px; max-height: 150px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; border: 1px solid #333; }
+        .screenshot-box { border: 2px solid #3b82f6; border-radius: 12px; overflow: hidden; background: #000; }
     </style>
 </head>
 <body class="p-4 flex flex-col items-center">
     <div class="w-full max-w-md space-y-4">
         <h1 class="text-xl font-bold text-center text-blue-400">AUTOMATION FLOW</h1>
 
-        <div id="error-display" class="hidden p-4 error-overlay rounded-xl space-y-2">
-            <h2 class="text-red-500 font-bold text-sm">❌ ERRO DETECTADO</h2>
-            <p id="error-text" class="text-[10px] text-white"></p>
-            <img id="error-img" class="w-full border border-red-500 rounded-lg">
-            <button onclick="location.reload()" class="w-full p-2 bg-red-600 text-white text-xs rounded-lg">Recarregar Sistema</button>
+        <div id="robot-view" class="hidden space-y-2">
+            <h2 id="view-title" class="text-xs font-bold text-blue-300 text-center uppercase">Monitor do Robô</h2>
+            <div class="screenshot-box">
+                <img id="screen-img" class="w-full">
+            </div>
         </div>
 
         <input id="flow-url" type="text" placeholder="Link do Flow" class="w-full p-4 mobile-field outline-none">
         
         <label id="cookie-label" class="block w-full p-4 text-center mobile-field cursor-pointer text-sm bg-slate-800 border-dashed border-2">
-            📂 Carregar Cookies (.json)
+            📂 Cookies (.json)
             <input type="file" id="cookies-file" class="hidden" accept=".json">
         </label>
-        <div id="cookie-info" class="hidden text-center text-green-400 text-[10px]">✅ Cookies Blindados (Base64)</div>
+        <div id="cookie-info" class="hidden text-center text-green-400 text-[10px]">✅ Cookies Prontos</div>
 
         <textarea id="prompt-input" class="w-full p-4 mobile-field h-40 outline-none" placeholder="Prompt 1...&#10;Prompt 2..."></textarea>
         
         <button id="btn-start" class="w-full p-4 bg-blue-600 rounded-xl font-bold">Iniciar Automação</button>
-        <button id="btn-stop" class="hidden w-full p-4 bg-red-600 rounded-xl font-bold">Parar</button>
+        <button id="btn-stop" class="hidden w-full p-4 bg-red-600 rounded-xl font-bold">Parar e Resetar</button>
 
-        <div id="confirm-box" class="hidden p-4 bg-green-900/50 border border-green-500 rounded-xl text-center space-y-2">
-            <p id="confirm-msg" class="text-sm">Aguardando confirmação...</p>
-            <button id="btn-confirm" class="w-full p-2 bg-green-500 text-black font-bold rounded-lg">Confirmar e Rodar</button>
+        <div id="confirm-box" class="hidden p-4 bg-green-900/50 border border-green-500 rounded-xl text-center space-y-3">
+            <p id="confirm-msg" class="text-sm font-bold">O robô carregou a página!</p>
+            <button id="btn-confirm" class="w-full p-3 bg-green-500 text-black font-bold rounded-lg shadow-lg">Confirmar Início do Loop</button>
         </div>
 
         <div id="logs" class="log-box"></div>
-        <div id="results" class="space-y-4 pb-10"></div>
+        <div id="results" class="grid grid-cols-1 gap-4 pb-10"></div>
     </div>
 
     <script>
         const socket = io();
         let cookiesBase64 = null;
-        const state = { prompts: [], assets: [] };
+        const state = { prompts: [] };
 
         document.getElementById('cookies-file').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (file) {
                 const reader = new FileReader();
                 reader.onload = (event) => {
-                    const text = event.target.result;
-                    cookiesBase64 = btoa(unescape(encodeURIComponent(text.trim())));
+                    cookiesBase64 = btoa(unescape(encodeURIComponent(event.target.result.trim())));
                     document.getElementById('cookie-info').classList.remove('hidden');
-                    addLog("Arquivo de cookies codificado com sucesso.");
                 };
                 reader.readAsText(file);
             }
@@ -71,7 +69,7 @@
         });
 
         document.getElementById('btn-start').onclick = () => {
-            addLog("Solicitando conexão com o navegador...");
+            addLog("Solicitando navegador...");
             socket.emit('start-automation', {
                 link: document.getElementById('flow-url').value,
                 prompts: state.prompts,
@@ -81,21 +79,24 @@
             document.getElementById('btn-stop').classList.remove('hidden');
         };
 
-        socket.on('error-screenshot', (data) => {
-            document.getElementById('error-display').classList.remove('hidden');
-            document.getElementById('error-text').textContent = data.error;
-            document.getElementById('error-img').src = data.img;
-            addLog("ERRO: Print da tela recebido.");
+        // Recebe e exibe prints da tela
+        socket.on('screenshot-update', (data) => {
+            document.getElementById('robot-view').classList.remove('hidden');
+            document.getElementById('screen-img').src = data.img;
+            document.getElementById('view-title').textContent = data.title;
+            addLog(`Print: ${data.title}`);
         });
 
         socket.on('automation-status', (res) => {
             document.getElementById('confirm-box').classList.remove('hidden');
             document.getElementById('confirm-msg').textContent = res.msg;
+            window.scrollTo(0, 0); // Sobe a tela para o usuário ver o print e o botão
         });
 
         document.getElementById('btn-confirm').onclick = () => {
             socket.emit('confirm-start');
             document.getElementById('confirm-box').classList.add('hidden');
+            document.getElementById('view-title').textContent = "Automação em Curso...";
         };
 
         socket.on('log', (msg) => addLog(msg));
@@ -108,7 +109,8 @@
 
         socket.on('new-images', (data) => {
             const section = document.createElement('div');
-            section.innerHTML = `<h2 class="text-[10px]">#${data.index}</h2><div class="grid grid-cols-2 gap-2">${data.urls.map(u => `<img src="${u}" class="rounded">`).join('')}</div>`;
+            section.className = "bg-slate-900 p-2 rounded-lg border border-slate-700";
+            section.innerHTML = `<h3 class="text-[10px] text-blue-400 mb-1">Prompt #${data.index}</h3><div class="grid grid-cols-2 gap-1">${data.urls.map(u => `<img src="${u}" class="rounded">`).join('')}</div>`;
             document.getElementById('results').prepend(section);
         });
 
