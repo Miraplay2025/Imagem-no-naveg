@@ -25,6 +25,10 @@ io.on('connection', (socket) => {
 
     socket.on('start-automation', async (data) => {
         try {
+            // Feedback dos dados recebidos
+            socket.emit('log', `Dados recebidos: ${data.prompts.length} prompts e ${data.assets?.length || 0} referências.`);
+            if (data.cookies) socket.emit('log', 'Arquivo de cookies detectado.');
+
             socket.emit('log', 'Iniciando navegador no Render...');
             
             browser = await puppeteer.launch({
@@ -44,9 +48,10 @@ io.on('connection', (socket) => {
                 try {
                     const cookies = JSON.parse(data.cookies);
                     await page.setCookie(...cookies);
-                    socket.emit('log', 'Cookies aplicados com sucesso.');
+                    socket.emit('log', `Sucesso: ${cookies.length} cookies injetados no navegador.`);
                 } catch (e) {
-                    socket.emit('log', 'Erro ao processar cookies: ' + e.message);
+                    socket.emit('log', 'ERRO CRÍTICO NOS COOKIES: ' + e.message);
+                    throw new Error("Formato de cookies inválido. Use JSON.");
                 }
             }
 
@@ -55,15 +60,27 @@ io.on('connection', (socket) => {
             automationState.stopRequested = false;
 
             socket.emit('log', 'Acessando Flow...');
-            await page.goto(data.link, { waitUntil: 'networkidle2', timeout: 60000 });
+            const response = await page.goto(data.link, { waitUntil: 'networkidle2', timeout: 60000 });
+
+            // VERIFICAÇÃO DE LOGIN / REDIRECIONAMENTO
+            const currentUrl = page.url();
+            socket.emit('log', `URL Atual: ${currentUrl}`);
+
+            if (currentUrl.includes('accounts.google.com') || currentUrl.includes('login')) {
+                socket.emit('log', 'ALERTA: Redirecionado para página de Login. Os cookies falharam ou expiraram.');
+                await browser.close();
+                return socket.emit('log', 'ERRO: Sessão não autorizada. Verifique seus cookies.');
+            }
 
             socket.emit('automation-status', { 
-                msg: "login realizado com sucesso , pagina carregada com sucesso", 
+                msg: "Login verificado e página carregada com sucesso!", 
                 showConfirm: true 
             });
 
         } catch (err) {
-            socket.emit('log', `Erro no Start: ${err.message}`);
+            // Retorna o erro real para depuração
+            console.error(err);
+            socket.emit('log', `ERRO DE DEPURAÇÃO: ${err.stack || err.message}`);
         }
     });
 
