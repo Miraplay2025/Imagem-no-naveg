@@ -11,6 +11,15 @@
         .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; }
         .log-box { font-size: 10px; max-height: 150px; overflow-y: auto; background: #000; padding: 10px; border-radius: 8px; color: #10b981; border: 1px solid #333; }
         .screenshot-box { border: 2px solid #3b82f6; border-radius: 12px; overflow: hidden; background: #000; }
+        .asset-preview { width: 100%; height: 70px; object-fit: cover; border-radius: 6px; }
+        .asset-item { position: relative; }
+        .remove-btn { 
+            position: absolute; top: -5px; right: -5px; 
+            background: #ef4444; color: white; border-radius: 50%; 
+            width: 18px; height: 18px; font-size: 12px; 
+            display: flex; align-items: center; justify-content: center;
+            cursor: pointer; border: 1px solid white; font-weight: bold;
+        }
     </style>
 </head>
 <body class="p-4 flex flex-col items-center">
@@ -26,11 +35,21 @@
 
         <input id="flow-url" type="text" placeholder="Link do Flow" class="w-full p-4 mobile-field outline-none">
         
-        <label id="cookie-label" class="block w-full p-4 text-center mobile-field cursor-pointer text-sm bg-slate-800 border-dashed border-2">
-            📂 Cookies (.json)
-            <input type="file" id="cookies-file" class="hidden" accept=".json">
-        </label>
-        <div id="cookie-info" class="hidden text-center text-green-400 text-[10px]">✅ Cookies Prontos</div>
+        <div class="grid grid-cols-2 gap-2">
+            <label class="block p-3 text-center mobile-field cursor-pointer text-xs bg-slate-800 border-dashed border-2 border-slate-600">
+                📂 Cookies (.json)
+                <input type="file" id="cookies-file" class="hidden" accept=".json">
+                <div id="cookie-info" class="hidden mt-1 text-green-400 font-bold">✓ OK</div>
+            </label>
+
+            <label class="block p-3 text-center mobile-field cursor-pointer text-xs bg-slate-800 border-dashed border-2 border-slate-600">
+                🖼️ Referências
+                <input type="file" id="assets-file" class="hidden" multiple accept="image/*">
+                <div id="assets-count" class="hidden mt-1 text-blue-400 font-bold">0 arquivos</div>
+            </label>
+        </div>
+
+        <div id="assets-preview-container" class="grid grid-cols-3 gap-3 hidden bg-slate-900/50 p-3 rounded-lg border border-slate-800"></div>
 
         <textarea id="prompt-input" class="w-full p-4 mobile-field h-40 outline-none" placeholder="Prompt 1...&#10;Prompt 2..."></textarea>
         
@@ -49,8 +68,10 @@
     <script>
         const socket = io();
         let cookiesBase64 = null;
+        let referenceAssets = []; // Array centralizado de imagens
         const state = { prompts: [] };
 
+        // Processar Cookies
         document.getElementById('cookies-file').addEventListener('change', function(e) {
             const file = e.target.files[0];
             if (file) {
@@ -63,23 +84,82 @@
             }
         });
 
+        // Processar Imagens de Referência
+        document.getElementById('assets-file').addEventListener('change', async function(e) {
+            const files = Array.from(e.target.files);
+            
+            for (const file of files) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const base64 = event.target.result;
+                    const nameNoExt = file.name.replace(/\.[^/.]+$/, "");
+                    const id = Date.now() + Math.random().toString(16).slice(2); // ID único para remoção
+
+                    const assetObj = { id: id, name: file.name, nameNoExt: nameNoExt, data: base64 };
+                    referenceAssets.push(assetObj);
+                    renderAssets();
+                };
+                reader.readAsDataURL(file);
+            }
+            // Limpa o input para permitir subir o mesmo arquivo novamente se for deletado
+            e.target.value = '';
+        });
+
+        // Função para Renderizar a lista de Imagens
+        function renderAssets() {
+            const container = document.getElementById('assets-preview-container');
+            const countLabel = document.getElementById('assets-count');
+            
+            container.innerHTML = '';
+            
+            if (referenceAssets.length > 0) {
+                container.classList.remove('hidden');
+                countLabel.classList.remove('hidden');
+                countLabel.textContent = `${referenceAssets.length} arquivos`;
+
+                referenceAssets.forEach(asset => {
+                    const item = document.createElement('div');
+                    item.className = "asset-item text-center";
+                    item.innerHTML = `
+                        <div class="remove-btn" onclick="removeAsset('${asset.id}')">×</div>
+                        <img src="${asset.data}" class="asset-preview border border-slate-700 shadow-lg">
+                        <p class="text-[8px] truncate mt-1 text-slate-400 font-mono">${asset.name}</p>
+                    `;
+                    container.appendChild(item);
+                });
+            } else {
+                container.classList.add('hidden');
+                countLabel.classList.add('hidden');
+            }
+        }
+
+        // Função para Remover Imagem do Array e da Tela
+        window.removeAsset = function(id) {
+            referenceAssets = referenceAssets.filter(a => a.id !== id);
+            renderAssets();
+        };
+
         document.getElementById('prompt-input').addEventListener('input', (e) => {
             const rawMatches = e.target.value.split(/\bPrompt\b/i).slice(1);
             state.prompts = rawMatches.map(text => text.replace(/^[\s\d:.-]+/, "").trim()).filter(Boolean);
         });
 
         document.getElementById('btn-start').onclick = () => {
+            if (state.prompts.length === 0) {
+                alert("Por favor, insira pelo menos um prompt.");
+                return;
+            }
             addLog("Solicitando navegador...");
             socket.emit('start-automation', {
                 link: document.getElementById('flow-url').value,
                 prompts: state.prompts,
-                cookiesBase64: cookiesBase64
+                cookiesBase64: cookiesBase64,
+                assets: referenceAssets 
             });
             document.getElementById('btn-start').classList.add('hidden');
             document.getElementById('btn-stop').classList.remove('hidden');
         };
 
-        // Recebe e exibe prints da tela
         socket.on('screenshot-update', (data) => {
             document.getElementById('robot-view').classList.remove('hidden');
             document.getElementById('screen-img').src = data.img;
@@ -90,7 +170,7 @@
         socket.on('automation-status', (res) => {
             document.getElementById('confirm-box').classList.remove('hidden');
             document.getElementById('confirm-msg').textContent = res.msg;
-            window.scrollTo(0, 0); // Sobe a tela para o usuário ver o print e o botão
+            window.scrollTo(0, 0);
         });
 
         document.getElementById('btn-confirm').onclick = () => {
@@ -109,12 +189,20 @@
 
         socket.on('new-images', (data) => {
             const section = document.createElement('div');
-            section.className = "bg-slate-900 p-2 rounded-lg border border-slate-700";
-            section.innerHTML = `<h3 class="text-[10px] text-blue-400 mb-1">Prompt #${data.index}</h3><div class="grid grid-cols-2 gap-1">${data.urls.map(u => `<img src="${u}" class="rounded">`).join('')}</div>`;
+            section.className = "bg-slate-900 p-2 rounded-lg border border-slate-700 mb-2";
+            section.innerHTML = `
+                <h3 class="text-[10px] text-blue-400 mb-1">Prompt #${data.index}</h3>
+                <div class="grid grid-cols-2 gap-1">
+                    ${data.urls.map(u => `<img src="${u}" class="rounded">`).join('')}
+                </div>
+            `;
             document.getElementById('results').prepend(section);
         });
 
-        document.getElementById('btn-stop').onclick = () => { socket.emit('stop-automation'); location.reload(); };
+        document.getElementById('btn-stop').onclick = () => { 
+            socket.emit('stop-automation'); 
+            location.reload(); 
+        };
     </script>
 </body>
 </html>
