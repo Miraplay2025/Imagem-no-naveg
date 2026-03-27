@@ -11,18 +11,20 @@
         .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; transition: all 0.3s; }
         .mobile-field:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
         
-        /* Log Box Estilizada */
         .log-box { 
             font-size: 11px; 
-            max-height: 200px; 
+            max-height: 250px; 
             overflow-y: auto; 
             background: #000; 
             padding: 12px; 
             border-radius: 12px; 
             border: 1px solid #334155;
             font-family: 'Fira Code', monospace;
+            display: flex;
+            flex-direction: column-reverse;
         }
-        .log-entry { margin-bottom: 4px; border-left: 3px solid #475569; padding-left: 8px; }
+        .log-entry { margin-bottom: 4px; border-left: 3px solid #475569; padding-left: 8px; animation: slideIn 0.2s ease; }
+        @keyframes slideIn { from { opacity:0; transform: translateX(-5px); } to { opacity:1; transform: translateX(0); } }
         .log-success { border-color: #10b981; color: #34d399; }
         .log-error { border-color: #ef4444; color: #f87171; background: rgba(239, 68, 68, 0.1); }
         .log-warning { border-color: #f59e0b; color: #fbbf24; }
@@ -37,8 +39,7 @@
         }
         
         .asset-preview { width: 100%; height: 70px; object-fit: cover; border-radius: 8px; }
-        .asset-item { position: relative; animation: fadeIn 0.3s ease; }
-        @keyframes fadeIn { from { opacity: 0; transform: scale(0.9); } to { opacity: 1; transform: scale(1); } }
+        .asset-item { position: relative; }
         
         .remove-btn { 
             position: absolute; top: -6px; right: -6px; 
@@ -49,20 +50,25 @@
             z-index: 10;
         }
         
-        .btn-main { transition: transform 0.1s; }
-        .btn-main:active { transform: scale(0.98); }
+        .btn-main { transition: all 0.2s; }
+        .btn-main:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-main:active:not(:disabled) { transform: scale(0.98); }
+
+        /* Estilo para inputs obrigatórios pendentes */
+        .pending { border: 1px dashed #ef4444 !important; }
+        .loaded { border: 1px solid #10b981 !important; background: rgba(16, 185, 129, 0.05) !important; }
     </style>
 </head>
 <body class="p-4 flex flex-col items-center pb-20">
     <div class="w-full max-w-md space-y-5">
         <header class="text-center space-y-1">
-            <h1 class="text-2xl font-black tracking-tighter text-blue-500">FLOW AUTOMATOR</h1>
-            <p class="text-[10px] text-slate-500 uppercase tracking-widest font-bold">V3.0 High Performance</p>
+            <h1 class="text-2xl font-black tracking-tighter text-blue-500 italic">AUTO FLOW PRO</h1>
+            <p class="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Extension-Injected Automation</p>
         </header>
 
         <div id="robot-view" class="hidden space-y-2">
             <div class="flex justify-between items-center px-1">
-                <h2 id="view-title" class="text-[10px] font-bold text-blue-400 uppercase">Live Preview</h2>
+                <h2 id="view-title" class="text-[10px] font-bold text-blue-400 uppercase">Live Browser View</h2>
                 <span class="flex h-2 w-2 rounded-full bg-red-500 animate-pulse"></span>
             </div>
             <div class="screenshot-box">
@@ -70,42 +76,48 @@
             </div>
         </div>
 
-        <input id="flow-url" type="text" placeholder="https://flow.com/seu-link" class="w-full p-4 mobile-field outline-none text-sm font-medium">
+        <input id="flow-url" type="text" placeholder="Cole aqui o link do Projeto Flow" class="w-full p-4 mobile-field outline-none text-sm font-medium">
         
-        <div class="grid grid-cols-2 gap-3">
-            <label class="block p-4 text-center mobile-field cursor-pointer text-[11px] bg-slate-900/50 border-dashed border-2 border-slate-700 hover:border-blue-500">
-                <span class="block text-lg mb-1">🔑</span> Cookies JSON
-                <input type="file" id="cookies-file" class="hidden" accept=".json">
-                <div id="cookie-info" class="hidden mt-1 text-green-400 font-bold font-mono">✓ LOADED</div>
+        <div class="grid grid-cols-3 gap-2">
+            <label id="label-extension" class="block p-3 text-center mobile-field cursor-pointer text-[10px] bg-slate-900/50 border-dashed border-2 border-slate-700 pending">
+                <span class="block text-lg mb-1">📦</span> EXTENSÃO
+                <input type="file" id="extension-file" class="hidden" accept=".zip">
+                <div id="extension-info" class="hidden mt-1 text-green-400 font-bold">✓ OK</div>
             </label>
 
-            <label class="block p-4 text-center mobile-field cursor-pointer text-[11px] bg-slate-900/50 border-dashed border-2 border-slate-700 hover:border-blue-500">
-                <span class="block text-lg mb-1">🖼️</span> Referências
+            <label id="label-cookies" class="block p-3 text-center mobile-field cursor-pointer text-[10px] bg-slate-900/50 border-dashed border-2 border-slate-700 pending">
+                <span class="block text-lg mb-1">🔑</span> COOKIES
+                <input type="file" id="cookies-file" class="hidden" accept=".json">
+                <div id="cookie-info" class="hidden mt-1 text-green-400 font-bold">✓ OK</div>
+            </label>
+
+            <label class="block p-3 text-center mobile-field cursor-pointer text-[10px] bg-slate-900/50 border-dashed border-2 border-slate-700 hover:border-blue-500">
+                <span class="block text-lg mb-1">🖼️</span> ASSETS
                 <input type="file" id="assets-file" class="hidden" multiple accept="image/*">
-                <div id="assets-count" class="hidden mt-1 text-blue-400 font-bold">0 arquivos</div>
+                <div id="assets-count" class="hidden mt-1 text-blue-400 font-bold">0 un</div>
             </label>
         </div>
 
-        <div id="assets-preview-container" class="grid grid-cols-3 gap-2 hidden bg-slate-900/80 p-3 rounded-xl border border-slate-800"></div>
+        <div id="assets-preview-container" class="grid grid-cols-4 gap-2 hidden bg-slate-900/80 p-3 rounded-xl border border-slate-800"></div>
 
         <div class="relative">
-            <textarea id="prompt-input" class="w-full p-4 mobile-field h-48 outline-none text-sm resize-none" placeholder="Prompt 1...&#10;Prompt 2..."></textarea>
-            <div class="absolute bottom-2 right-2 text-[10px] text-slate-500 font-mono" id="prompt-stats">0 Prompts Detectados</div>
+            <textarea id="prompt-input" class="w-full p-4 mobile-field h-40 outline-none text-sm resize-none" placeholder="Prompt 1...&#10;Prompt 2..."></textarea>
+            <div class="absolute bottom-2 right-2 text-[9px] text-slate-500 font-mono" id="prompt-stats">Aguardando Prompts</div>
         </div>
         
         <button id="btn-start" class="btn-main w-full p-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black text-lg shadow-lg shadow-blue-900/20">INICIAR ROBÔ</button>
-        <button id="btn-stop" class="hidden btn-main w-full p-4 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-black text-lg">PARAR TUDO</button>
+        <button id="btn-stop" class="hidden btn-main w-full p-4 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-black text-lg">PARAR OPERAÇÃO</button>
 
-        <div id="confirm-box" class="hidden p-5 bg-green-950/40 border-2 border-green-500/50 rounded-2xl text-center space-y-4 backdrop-blur-sm">
+        <div id="confirm-box" class="hidden p-5 bg-blue-950/40 border-2 border-blue-500/50 rounded-2xl text-center space-y-4 backdrop-blur-sm">
             <div class="space-y-1">
-                <p class="text-green-400 font-black text-sm uppercase">Página Pronta!</p>
-                <p class="text-[11px] text-slate-300">O robô carregou os cookies e o Flow. Deseja iniciar o envio dos prompts?</p>
+                <p class="text-blue-400 font-black text-sm uppercase">Página e Extensão Carregadas</p>
+                <p class="text-[11px] text-slate-300 italic">O robô está posicionado. Confirmar início da automação?</p>
             </div>
-            <button id="btn-confirm" class="w-full p-4 bg-green-500 hover:bg-green-400 text-black font-black rounded-xl shadow-xl">INICIAR AGORA</button>
+            <button id="btn-confirm" class="w-full p-4 bg-blue-500 hover:bg-blue-400 text-white font-black rounded-xl">SIM, COMEÇAR AGORA</button>
         </div>
 
         <div class="space-y-2">
-            <p class="text-[10px] font-bold text-slate-500 uppercase px-1">Console de Operação</p>
+            <p class="text-[10px] font-bold text-slate-500 uppercase px-1">Monitor do Sistema</p>
             <div id="logs" class="log-box"></div>
         </div>
 
@@ -115,32 +127,52 @@
     <script>
         const socket = io();
         let cookiesBase64 = null;
+        let extensionZipBase64 = null;
         let referenceAssets = [];
         const state = { prompts: [] };
 
-        // --- Logica de Arquivos ---
+        // --- Leitura da Extensão (.zip) ---
+        document.getElementById('extension-file').onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                extensionZipBase64 = ev.target.result.split(',')[1];
+                document.getElementById('extension-info').classList.remove('hidden');
+                document.getElementById('label-extension').classList.replace('pending', 'loaded');
+                addLog("Extensão carregada com sucesso.", "success");
+            };
+            reader.readAsDataURL(file);
+        };
+
+        // --- Leitura de Cookies ---
         document.getElementById('cookies-file').onchange = (e) => {
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
             reader.onload = (ev) => {
-                cookiesBase64 = btoa(unescape(encodeURIComponent(ev.target.result.trim())));
-                document.getElementById('cookie-info').classList.remove('hidden');
-                addLog("Cookies carregados localmente.", "info");
+                try {
+                    JSON.parse(ev.target.result); // Valida se é JSON
+                    cookiesBase64 = btoa(unescape(encodeURIComponent(ev.target.result.trim())));
+                    document.getElementById('cookie-info').classList.remove('hidden');
+                    document.getElementById('label-cookies').classList.replace('pending', 'loaded');
+                    addLog("Cookies validados.", "success");
+                } catch(err) {
+                    addLog("Erro: O arquivo de cookies não é um JSON válido.", "error");
+                }
             };
             reader.readAsText(file);
         };
 
+        // --- Referências (Assets) ---
         document.getElementById('assets-file').onchange = async (e) => {
             const files = Array.from(e.target.files);
             for (const file of files) {
                 const reader = new FileReader();
                 reader.onload = (ev) => {
-                    const id = Math.random().toString(36).substr(2, 9);
                     referenceAssets.push({
-                        id: id,
+                        id: Math.random().toString(36).substr(2, 9),
                         name: file.name,
-                        nameNoExt: file.name.replace(/\.[^/.]+$/, ""),
                         data: ev.target.result
                     });
                     renderAssets();
@@ -154,18 +186,15 @@
             const container = document.getElementById('assets-preview-container');
             const countLabel = document.getElementById('assets-count');
             container.innerHTML = '';
-            
             if (referenceAssets.length > 0) {
                 container.classList.remove('hidden');
                 countLabel.classList.remove('hidden');
-                countLabel.textContent = `${referenceAssets.length} arquivos`;
+                countLabel.textContent = `${referenceAssets.length} un`;
                 referenceAssets.forEach(asset => {
                     const div = document.createElement('div');
                     div.className = "asset-item";
-                    div.innerHTML = `
-                        <div class="remove-btn" onclick="removeAsset('${asset.id}')">×</div>
-                        <img src="${asset.data}" class="asset-preview border border-slate-700">
-                    `;
+                    div.innerHTML = `<div class="remove-btn" onclick="removeAsset('${asset.id}')">×</div>
+                                     <img src="${asset.data}" class="asset-preview border border-slate-700">`;
                     container.appendChild(div);
                 });
             } else {
@@ -179,22 +208,33 @@
             renderAssets();
         };
 
-        // --- Logica de Prompts ---
+        // --- Processamento de Prompts ---
         document.getElementById('prompt-input').oninput = (e) => {
-            const raw = e.target.value.split(/\bPrompt\b/i).slice(1);
-            state.prompts = raw.map(t => t.replace(/^[\s\d:.-]+/, "").trim()).filter(Boolean);
-            document.getElementById('prompt-stats').textContent = `${state.prompts.length} Prompts Detectados`;
+            const val = e.target.value.trim();
+            // Divide por quebra de linha se não houver a palavra "Prompt"
+            if (val.toLowerCase().includes("prompt")) {
+                const raw = val.split(/\bPrompt\b/i).slice(1);
+                state.prompts = raw.map(t => t.replace(/^[\s\d:.-]+/, "").trim()).filter(Boolean);
+            } else {
+                state.prompts = val.split('\n').map(l => l.trim()).filter(Boolean);
+            }
+            document.getElementById('prompt-stats').textContent = `${state.prompts.length} Prompts Prontos`;
         };
 
-        // --- Socket & Operações ---
+        // --- Ações de Socket ---
         document.getElementById('btn-start').onclick = () => {
-            if (state.prompts.length === 0) return alert("Adicione prompts!");
+            const url = document.getElementById('flow-url').value;
+            if (!url || !extensionZipBase64 || !cookiesBase64 || state.prompts.length === 0) {
+                addLog("Atenção: Todos os campos (URL, Extensão, Cookies e Prompts) são obrigatórios!", "warning");
+                return;
+            }
             
-            addLog("Iniciando processo no servidor...", "info");
+            addLog("Enviando dados ao servidor...", "info");
             socket.emit('start-automation', {
-                link: document.getElementById('flow-url').value,
+                link: url,
                 prompts: state.prompts,
                 cookiesBase64: cookiesBase64,
+                extensionZip: extensionZipBase64,
                 assets: referenceAssets 
             });
             document.getElementById('btn-start').classList.add('hidden');
@@ -214,14 +254,13 @@
         document.getElementById('btn-confirm').onclick = () => {
             socket.emit('confirm-start');
             document.getElementById('confirm-box').classList.add('hidden');
-            addLog("Loop de prompts confirmado e iniciado.", "success");
+            addLog("Operação confirmada. Iniciando interação com o painel...", "success");
         };
 
         socket.on('log', (msg) => {
             let type = "info";
-            if (msg.toLowerCase().includes("erro") || msg.toLowerCase().includes("falha")) type = "error";
-            if (msg.toLowerCase().includes("ok") || msg.toLowerCase().includes("sucesso") || msg.toLowerCase().includes("fim")) type = "success";
-            if (msg.toLowerCase().includes("aguardando") || msg.toLowerCase().includes("aviso")) type = "warning";
+            if (msg.includes("❌") || msg.toLowerCase().includes("erro")) type = "error";
+            if (msg.includes("✅") || msg.toLowerCase().includes("sucesso")) type = "success";
             addLog(msg, type);
         });
 
@@ -229,27 +268,32 @@
             const logBox = document.getElementById('logs');
             const entry = document.createElement('div');
             entry.className = `log-entry log-${type}`;
-            const time = new Date().toLocaleTimeString('pt-BR', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            const time = new Date().toLocaleTimeString('pt-BR', { hour12: false });
             entry.innerHTML = `<span class="opacity-40 text-[9px] mr-2">${time}</span> ${msg}`;
-            logBox.prepend(entry);
+            logBox.appendChild(entry);
+            logBox.scrollTop = logBox.scrollHeight;
         }
 
         socket.on('new-images', (data) => {
             const div = document.createElement('div');
-            div.className = "bg-slate-900/80 p-3 rounded-2xl border border-slate-800 space-y-2";
+            div.className = "bg-slate-900/80 p-3 rounded-2xl border border-slate-800 space-y-2 animate-bounce";
             div.innerHTML = `
                 <div class="flex justify-between items-center text-[10px] px-1">
-                    <span class="text-blue-400 font-bold uppercase">Prompt #${data.index}</span>
+                    <span class="text-blue-400 font-bold uppercase">Prompt #${data.index} - Capturado</span>
                     <span class="text-slate-500 font-mono">${new Date().toLocaleTimeString()}</span>
                 </div>
                 <div class="grid grid-cols-2 gap-2">
-                    ${data.urls.map(u => `<img src="${u}" class="rounded-xl border border-slate-700 hover:scale-105 transition-transform">`).join('')}
+                    ${data.urls.map(u => `<img src="${u}" class="rounded-xl border border-slate-700 hover:scale-[1.02] transition-all">`).join('')}
                 </div>
             `;
             document.getElementById('results').prepend(div);
+            setTimeout(() => div.classList.remove('animate-bounce'), 1000);
         });
 
-        document.getElementById('btn-stop').onclick = () => { socket.emit('stop-automation'); location.reload(); };
+        document.getElementById('btn-stop').onclick = () => { 
+            socket.emit('stop-automation'); 
+            setTimeout(() => location.reload(), 1000);
+        };
     </script>
 </body>
 </html>
