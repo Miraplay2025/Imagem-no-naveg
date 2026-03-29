@@ -16,16 +16,12 @@ const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
-// Serve os arquivos da pasta public (onde deve estar seu index.html)
 app.use(express.static('public'));
 
 let browser = null;
 let page = null;
 const EXTENSION_DIR = path.join(__dirname, 'temp_extension');
 
-/**
- * FUNÇÃO PARA TIRAR PRINT E ENVIAR VIA SOCKET
- */
 async function sendScreenshot(socket, page, title) {
     if (page) {
         try {
@@ -40,9 +36,6 @@ async function sendScreenshot(socket, page, title) {
     }
 }
 
-/**
- * FUNÇÃO DE CAPTURA DE ERRO COM PRINT
- */
 async function reportError(socket, page, errorMsg) {
     if (page) {
         await sendScreenshot(socket, page, "❌ ERRO DETECTADO");
@@ -52,7 +45,6 @@ async function reportError(socket, page, errorMsg) {
 }
 
 io.on('connection', (socket) => {
-    // REQUISITO: Notificar o HTML que a conexão foi estabelecida
     console.log('Cliente conectado ao Server Pro');
     socket.emit('log', '✅ Conectado ao Servidor de Automação');
     socket.emit('connection-success', { status: 'connected' });
@@ -64,32 +56,23 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            socket.emit('log', '📦 Processando extensão e preparando ambiente...');
+            socket.emit('log', '📦 Preparando ambiente e extensão...');
 
-            // 1. Extração Segura da Extensão
-            try {
-                if (fs.existsSync(EXTENSION_DIR)) {
-                    fs.rmSync(EXTENSION_DIR, { recursive: true, force: true });
-                }
-                fs.mkdirSync(EXTENSION_DIR, { recursive: true });
-                
-                const zipBuffer = Buffer.from(data.extensionZip, 'base64');
-                const zipPath = path.join(__dirname, 'extension.zip');
-                fs.writeFileSync(zipPath, zipBuffer);
-
-                // Aguarda a extração terminar completamente
-                await fs.createReadStream(zipPath)
-                    .pipe(unzipper.Extract({ path: EXTENSION_DIR }))
-                    .promise();
-                
-                socket.emit('log', '✅ Extensão extraída com sucesso.');
-            } catch (zipErr) {
-                throw new Error(`Falha crítica no ZIP: ${zipErr.message}`);
+            if (fs.existsSync(EXTENSION_DIR)) {
+                fs.rmSync(EXTENSION_DIR, { recursive: true, force: true });
             }
+            fs.mkdirSync(EXTENSION_DIR, { recursive: true });
+            
+            const zipBuffer = Buffer.from(data.extensionZip, 'base64');
+            const zipPath = path.join(__dirname, 'extension.zip');
+            fs.writeFileSync(zipPath, zipBuffer);
 
-            socket.emit('log', '🚀 Abrindo navegador Puppeteer...');
+            await fs.createReadStream(zipPath)
+                .pipe(unzipper.Extract({ path: EXTENSION_DIR }))
+                .promise();
+            
+            socket.emit('log', '✅ Extensão extraída.');
 
-            // 2. Iniciar Puppeteer
             browser = await puppeteer.launch({
                 headless: false,
                 args: [
@@ -105,24 +88,53 @@ io.on('connection', (socket) => {
             page = pages[0];
             page.setDefaultTimeout(60000);
 
-            // 3. Cookies
-            try {
-                const decoded = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
-                const cookies = JSON.parse(decoded);
-                await page.setCookie(...(Array.isArray(cookies) ? cookies : [cookies]));
-                socket.emit('log', '✅ Sessão (Cookies) restaurada.');
-            } catch (e) {
-                throw new Error(`Erro nos Cookies JSON: ${e.message}`);
-            }
-
-            // 4. Navegação
+            const decoded = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
+            const cookies = JSON.parse(decoded);
+            await page.setCookie(...(Array.isArray(cookies) ? cookies : [cookies]));
+            
             socket.emit('log', `🌐 Navegando para: ${data.link}`);
             await page.goto(data.link, { waitUntil: 'networkidle2' });
+
+            // --- LÓGICA DE PREENCHIMENTO E DETECÇÃO ANTES DA CONFIRMAÇÃO ---
+            socket.emit('log', '📝 Preenchendo dados no painel...');
             
-            await sendScreenshot(socket, page, "Página Carregada - Confirme o Início");
-            socket.emit('automation-status', { msg: "Pronto para iniciar!", showConfirm: true });
+            const detection = await page.evaluate(async (prompts, assets) => {
+                const wait = (ms) => new Promise(r => setTimeout(r, ms));
+                const toggleBtn = document.querySelector('div[style*="z-index: 10001"]');
+                if (toggleBtn) toggleBtn.click();
+                await wait(1000);
+
+                const panel = document.getElementById('awu-panel');
+                if (!panel) return { error: "Painel não encontrado" };
+
+                // Formata prompts com o prefixo obrigatório
+                const formattedPrompts = prompts.map(p => `Prompt\n${p}`).join('\n\n');
+                
+                const textarea = panel.querySelector('textarea');
+                if (textarea) {
+                    textarea.value = formattedPrompts;
+                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                }
+
+                if (assets) {
+                    localStorage.setItem("flow_persistent_assets_v3", JSON.stringify(assets));
+                }
+
+                await wait(500);
+                
+                // Busca o número total de prompts exibido na interface (usando a classe de contador)
+                const counterElement = panel.querySelector('.text-blue-400.font-bold') || panel.querySelector('span[style*="color"]');
+                const totalDetected = counterElement ? counterElement.innerText.replace(/\D/g, "") : prompts.length;
+
+                return { total: totalDetected };
+            }, data.prompts, data.assets);
+
+            await sendScreenshot(socket, page, "Dados Preenchidos");
+            socket.emit('automation-status', { 
+                msg: `Extensão detectou ${detection.total} prompts. Pronto para iniciar?`, 
+                showConfirm: true 
+            });
             
-            // Salva os dados para o próximo passo (confirmação)
             page.automationData = data;
 
         } catch (err) {
@@ -132,29 +144,41 @@ io.on('connection', (socket) => {
 
     socket.on('confirm-start', async () => {
         if (!page) return;
-        const data = page.automationData;
 
         try {
-            // Expõe a função para a extensão chamar o print do Node
             await page.exposeFunction('sendScreenshotToNode', (title) => sendScreenshot(socket, page, title));
 
-            // Monitor de Console (Logs da Extensão)
+            // --- MONITORAMENTO DE LOGS DO PAINEL DA EXTENSÃO ---
+            // Esta função observa mudanças na div de logs da extensão e envia para o HTML
+            await page.evaluate(() => {
+                const logDiv = document.querySelector("#awu-log");
+                if (logDiv) {
+                    const observer = new MutationObserver((mutations) => {
+                        mutations.forEach((mutation) => {
+                            if (mutation.addedNodes.length) {
+                                const newLog = mutation.addedNodes[0].innerText;
+                                console.log(`[EXT_PANEL_LOG]|${newLog}`);
+                            }
+                        });
+                    });
+                    observer.observe(logDiv, { childList: true });
+                }
+            });
+
             page.on('console', async msg => {
                 const text = msg.text();
                 
-                if (text.includes('[FLOW_LOG]')) {
-                    const logContent = text.split('|')[2] || text;
-                    socket.emit('log', logContent);
+                // Logs vindos do Observador do Painel (Interface)
+                if (text.startsWith('[EXT_PANEL_LOG]|')) {
+                    socket.emit('log', text.split('|')[1]);
                 }
 
+                // Logs de Imagens e Blobs
                 if (text.includes('[IMAGES]')) {
                     const parts = text.split('|');
                     const index = parts[1];
                     const blobUrls = JSON.parse(parts[2]);
 
-                    socket.emit('log', `🖼️ Capturando ${blobUrls.length} imagens geradas...`);
-
-                    // Converte Blob URLs em Base64 para persistência no HTML
                     const base64Images = await page.evaluate(async (urls) => {
                         const convert = async (url) => {
                             const response = await fetch(url);
@@ -169,55 +193,28 @@ io.on('connection', (socket) => {
                     }, blobUrls);
 
                     socket.emit('new-images', { index: index, urls: base64Images });
-                    socket.emit('log', `✅ Prompt #${index} finalizado e enviado.`);
                 }
             });
 
-            socket.emit('log', '⚙️ Injetando comandos no painel da extensão...');
-
-            // 5. Automação do Painel Interno
-            await page.evaluate(async (prompts, assets) => {
-                const wait = (ms) => new Promise(r => setTimeout(r, ms));
-                
-                // Abre o painel se estiver fechado (baseado no seletor do toggleBtn)
-                const toggleBtn = document.querySelector('div[style*="z-index: 10001"]');
-                if (toggleBtn) toggleBtn.click();
-                await wait(1500);
-
+            // Inicia a automação clicando no botão do painel
+            await page.evaluate(() => {
                 const panel = document.getElementById('awu-panel');
-                if (!panel) return console.error("Painel da extensão não injetado!");
-
-                const textarea = panel.querySelector('textarea');
-                if (textarea) {
-                    textarea.value = prompts.join('\n');
-                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-
-                // Salva assets no localStorage para a extensão ler
-                localStorage.setItem("flow_persistent_assets_v3", JSON.stringify(assets));
-
-                // Clica no botão de iniciar da EXTENSÃO
                 const startBtn = [...panel.querySelectorAll('button')].find(b => 
                     b.innerText.includes('INICIAR') || b.innerText.includes('START')
                 );
-                
-                if (startBtn) {
-                    startBtn.click();
-                    window.sendScreenshotToNode("Iniciando Fluxo de Geração");
-                }
-            }, data.prompts, data.assets);
+                if (startBtn) startBtn.click();
+            });
 
         } catch (err) {
-            await reportError(socket, page, `Falha na Injeção: ${err.message}`);
+            await reportError(socket, page, `Falha no Início: ${err.message}`);
         }
     });
 
     socket.on('stop-automation', async () => {
-        socket.emit('log', '🛑 Comando de parada recebido.');
+        socket.emit('log', '🛑 Parando navegadores...');
         if (browser) {
             await browser.close();
-            browser = null;
-            page = null;
+            browser = null; page = null;
         }
     });
 
@@ -228,7 +225,5 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`\n========================================`);
     console.log(`🚀 SERVER PRO ATIVO: http://localhost:${PORT}`);
-    console.log(`========================================\n`);
 });
