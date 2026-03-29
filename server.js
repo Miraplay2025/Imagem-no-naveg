@@ -23,22 +23,24 @@ let page = null;
 const EXTENSION_DIR = path.join(__dirname, 'temp_extension');
 
 async function sendScreenshot(socket, page, title) {
-    if (page) {
+    if (page && !page.isClosed()) {
         try {
+            // Pequena espera para garantir que o buffer de imagem esteja pronto
+            await new Promise(r => setTimeout(r, 500));
             const screenshot = await page.screenshot({ encoding: 'base64', fullPage: false });
             socket.emit('screenshot-update', { 
                 img: `data:image/png;base64,${screenshot}`, 
                 title: title 
             });
         } catch (e) {
-            console.log('Erro screenshot:', e.message);
+            console.log('Erro ao capturar screenshot:', e.message);
         }
     }
 }
 
 async function reportError(socket, page, errorMsg) {
-    if (page) {
-        await sendScreenshot(socket, page, "❌ ERRO DETECTADO");
+    if (page && !page.isClosed()) {
+        await sendScreenshot(socket, page, "❌ ESTADO DO ERRO");
     }
     socket.emit('log', `❌ LOG DE ERRO: ${errorMsg}`);
     console.error(`[Erro]: ${errorMsg}`);
@@ -46,33 +48,25 @@ async function reportError(socket, page, errorMsg) {
 
 io.on('connection', (socket) => {
     console.log('Cliente conectado ao Server Pro');
-    socket.emit('log', '✅ Conectado ao Servidor de Automação');
-    socket.emit('connection-success', { status: 'connected' });
+    socket.emit('log', '✅ Conectado ao Servidor');
 
     socket.on('start-automation', async (data) => {
         try {
             if (!data.extensionZip || !data.prompts || !data.cookiesBase64) {
-                socket.emit('log', '⚠️ Erro: Falta Extensão, Prompts ou Cookies!');
+                socket.emit('log', '⚠️ Erro: Dados insuficientes para iniciar.');
                 return;
             }
 
-            socket.emit('log', '📦 Preparando ambiente e extensão...');
-
-            if (fs.existsSync(EXTENSION_DIR)) {
-                fs.rmSync(EXTENSION_DIR, { recursive: true, force: true });
-            }
+            socket.emit('log', '📦 Extraindo extensão...');
+            if (fs.existsSync(EXTENSION_DIR)) fs.rmSync(EXTENSION_DIR, { recursive: true, force: true });
             fs.mkdirSync(EXTENSION_DIR, { recursive: true });
             
             const zipBuffer = Buffer.from(data.extensionZip, 'base64');
             const zipPath = path.join(__dirname, 'extension.zip');
             fs.writeFileSync(zipPath, zipBuffer);
-
-            await fs.createReadStream(zipPath)
-                .pipe(unzipper.Extract({ path: EXTENSION_DIR }))
-                .promise();
+            await fs.createReadStream(zipPath).pipe(unzipper.Extract({ path: EXTENSION_DIR })).promise();
             
-            socket.emit('log', '✅ Extensão extraída.');
-
+            socket.emit('log', '🚀 Lançando navegador...');
             browser = await puppeteer.launch({
                 headless: 'new', 
                 args: [
@@ -80,8 +74,6 @@ io.on('connection', (socket) => {
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
-                    '--no-zygote',
-                    '--single-process',
                     `--disable-extensions-except=${EXTENSION_DIR}`,
                     `--load-extension=${EXTENSION_DIR}`,
                     '--window-size=1280,800'
@@ -89,68 +81,68 @@ io.on('connection', (socket) => {
             });
 
             const pages = await browser.pages();
-            page = pages[0];
+            page = pages.length > 0 ? pages[0] : await browser.newPage();
             page.setDefaultTimeout(60000);
 
             const decoded = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
-            const cookies = JSON.parse(decoded);
-            await page.setCookie(...(Array.isArray(cookies) ? cookies : [cookies]));
+            await page.setCookie(...JSON.parse(decoded));
             
             socket.emit('log', `🌐 Navegando para: ${data.link}`);
-
-            // --- CORREÇÃO DO ERRO 'FRAME DETACHED' E CHECAGEM DE REDIRECIONAMENTO ---
+            
+            // Navegação com tratamento para evitar "Main frame too early"
             try {
-                await Promise.all([
-                    page.goto(data.link, { waitUntil: 'domcontentloaded', timeout: 60000 }),
-                    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null)
-                ]);
-            } catch (navError) {
-                console.log("Aviso de Navegação:", navError.message);
-                // Não trava o fluxo, tenta prosseguir se a página existir
+                await page.goto(data.link, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                // Espera extra para estabilização de rede
+                await page.waitForNetworkIdle({ idleTime: 1000, timeout: 10000 }).catch(() => {});
+            } catch (e) {
+                socket.emit('log', `⚠️ Aviso de carregamento: ${e.message}`);
             }
 
-            const finalUrl = page.url();
-            if (!finalUrl.includes(data.link.split('?')[0])) {
-                socket.emit('log', `⚠️ Redirecionamento detectado! URL atual: ${finalUrl}`);
-                await sendScreenshot(socket, page, "Página Pós-Redirecionamento");
+            // --- ETAPA SOLICITADA: PRINT E VERIFICAÇÃO ANTES DE QUALQUER INTERAÇÃO ---
+            socket.emit('log', '📸 Verificando integridade da página...');
+            await sendScreenshot(socket, page, "PÁGINA INICIAL (PRÉ-INTERAÇÃO)");
+
+            const currentUrl = page.url();
+            if (!currentUrl.includes("labs.google") || currentUrl.includes("signin")) {
+                socket.emit('log', `⚠️ REDIRECIONAMENTO DETECTADO: ${currentUrl}`);
+                await sendScreenshot(socket, page, "TELA DE REDIRECIONAMENTO/LOGIN");
+                // Não interrompe, mas avisa o usuário
             }
             // -----------------------------------------------------------------------
 
-            socket.emit('log', '📝 Preenchendo dados no painel...');
+            socket.emit('log', '📝 Preparando injeção no painel...');
             
             const detection = await page.evaluate(async (prompts, assets) => {
                 const wait = (ms) => new Promise(r => setTimeout(r, ms));
+                
+                // Busca o botão de toggle da sua extensão
                 const toggleBtn = document.querySelector('div[style*="z-index: 10001"]');
-                if (toggleBtn) toggleBtn.click();
-                await wait(1500);
+                if (toggleBtn) {
+                    toggleBtn.click();
+                    await wait(2000); // Tempo para o painel abrir
+                }
 
                 const panel = document.getElementById('awu-panel');
-                if (!panel) return { error: "Painel não encontrado" };
+                if (!panel) return { error: "Painel não localizado. Verifique se a extensão carregou." };
 
-                const formattedPrompts = prompts.map(p => `Prompt\n${p}`).join('\n\n');
-                
                 const textarea = panel.querySelector('textarea');
                 if (textarea) {
-                    textarea.value = formattedPrompts;
+                    textarea.value = prompts.map(p => `Prompt\n${p}`).join('\n\n');
                     textarea.dispatchEvent(new Event('input', { bubbles: true }));
                 }
 
-                if (assets) {
-                    localStorage.setItem("flow_persistent_assets_v3", JSON.stringify(assets));
-                }
+                if (assets) localStorage.setItem("flow_persistent_assets_v3", JSON.stringify(assets));
 
-                await wait(500);
-                const counterElement = panel.querySelector('.text-blue-400.font-bold') || panel.querySelector('span[style*="color"]');
-                const totalDetected = counterElement ? counterElement.innerText.replace(/\D/g, "") : prompts.length;
-
-                return { total: totalDetected };
+                await wait(1000);
+                const counter = panel.querySelector('.text-blue-400.font-bold') || panel.querySelector('span[style*="color"]');
+                return { total: counter ? counter.innerText.replace(/\D/g, "") : prompts.length };
             }, data.prompts, data.assets);
 
             if (detection.error) throw new Error(detection.error);
 
-            await sendScreenshot(socket, page, "Dados Preenchidos");
+            await sendScreenshot(socket, page, "PAINEL PRONTO");
             socket.emit('automation-status', { 
-                msg: `Extensão detectou ${detection.total} prompts. Pronto para iniciar?`, 
+                msg: `Detectados ${detection.total} prompts. Iniciar execução?`, 
                 showConfirm: true 
             });
             
@@ -163,80 +155,49 @@ io.on('connection', (socket) => {
 
     socket.on('confirm-start', async () => {
         if (!page) return;
-
         try {
             await page.exposeFunction('sendScreenshotToNode', (title) => sendScreenshot(socket, page, title));
 
-            await page.evaluate(() => {
-                const logDiv = document.querySelector("#awu-log");
-                if (logDiv) {
-                    const observer = new MutationObserver((mutations) => {
-                        mutations.forEach((mutation) => {
-                            if (mutation.addedNodes.length) {
-                                const newLog = mutation.addedNodes[0].innerText;
-                                console.log(`[EXT_PANEL_LOG]|${newLog}`);
-                            }
-                        });
-                    });
-                    observer.observe(logDiv, { childList: true });
-                }
-            });
-
             page.on('console', async msg => {
                 const text = msg.text();
-                if (text.startsWith('[EXT_PANEL_LOG]|')) {
-                    socket.emit('log', text.split('|')[1]);
-                }
-
+                if (text.startsWith('[EXT_PANEL_LOG]|')) socket.emit('log', text.split('|')[1]);
                 if (text.includes('[IMAGES]')) {
                     const parts = text.split('|');
-                    const index = parts[1];
-                    const blobUrls = JSON.parse(parts[2]);
-
                     const base64Images = await page.evaluate(async (urls) => {
-                        const convert = async (url) => {
-                            const response = await fetch(url);
-                            const blob = await response.blob();
-                            return new Promise((resolve) => {
-                                const reader = new FileReader();
-                                reader.onloadend = () => resolve(reader.result);
-                                reader.readAsDataURL(blob);
+                        const conv = async (u) => {
+                            const r = await fetch(u);
+                            const b = await r.blob();
+                            return new Promise(res => {
+                                const rd = new FileReader();
+                                rd.onloadend = () => res(rd.result);
+                                rd.readAsDataURL(b);
                             });
                         };
-                        return Promise.all(urls.map(u => convert(u)));
-                    }, blobUrls);
-
-                    socket.emit('new-images', { index: index, urls: base64Images });
+                        return Promise.all(urls.map(u => conv(u)));
+                    }, JSON.parse(parts[2]));
+                    socket.emit('new-images', { index: parts[1], urls: base64Images });
                 }
             });
 
             await page.evaluate(() => {
-                const panel = document.getElementById('awu-panel');
-                const startBtn = [...panel.querySelectorAll('button')].find(b => 
-                    b.innerText.includes('INICIAR') || b.innerText.includes('START')
-                );
-                if (startBtn) startBtn.click();
+                const btn = [...document.querySelectorAll('button')].find(b => b.innerText.includes('INICIAR') || b.innerText.includes('START'));
+                if (btn) btn.click();
             });
-
         } catch (err) {
-            await reportError(socket, page, `Falha no Início: ${err.message}`);
+            await reportError(socket, page, `Erro no início: ${err.message}`);
         }
     });
 
     socket.on('stop-automation', async () => {
-        socket.emit('log', '🛑 Parando...');
         if (browser) {
             await browser.close();
             browser = null; page = null;
+            socket.emit('log', '🛑 Navegador encerrado.');
         }
     });
 
-    socket.on('disconnect', () => {
-        console.log('Cliente desconectado.');
-    });
+    socket.on('disconnect', () => console.log('Cliente saiu.'));
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`🚀 SERVER PRO ATIVO NA PORTA ${PORT}`);
-});
+server.listen(PORT, () => console.log(`🚀 SERVER ONLINE NA PORTA ${PORT}`));
