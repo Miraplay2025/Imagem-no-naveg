@@ -73,11 +73,7 @@ io.on('connection', (socket) => {
             
             socket.emit('log', '✅ Extensão extraída.');
 
-            // --- CORREÇÃO DO ERRO DE LAUNCH ---
             browser = await puppeteer.launch({
-                // Se estiver no servidor, use 'new' para rodar sem janela. 
-                // Note que extensões normalmente exigem headless: false. 
-                // Para rodar extensões em servidor Linux, usamos as flags abaixo:
                 headless: 'new', 
                 args: [
                     '--no-sandbox',
@@ -101,22 +97,36 @@ io.on('connection', (socket) => {
             await page.setCookie(...(Array.isArray(cookies) ? cookies : [cookies]));
             
             socket.emit('log', `🌐 Navegando para: ${data.link}`);
-            await page.goto(data.link, { waitUntil: 'networkidle2' });
+
+            // --- CORREÇÃO DO ERRO 'FRAME DETACHED' E CHECAGEM DE REDIRECIONAMENTO ---
+            try {
+                await Promise.all([
+                    page.goto(data.link, { waitUntil: 'domcontentloaded', timeout: 60000 }),
+                    page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => null)
+                ]);
+            } catch (navError) {
+                console.log("Aviso de Navegação:", navError.message);
+                // Não trava o fluxo, tenta prosseguir se a página existir
+            }
+
+            const finalUrl = page.url();
+            if (!finalUrl.includes(data.link.split('?')[0])) {
+                socket.emit('log', `⚠️ Redirecionamento detectado! URL atual: ${finalUrl}`);
+                await sendScreenshot(socket, page, "Página Pós-Redirecionamento");
+            }
+            // -----------------------------------------------------------------------
 
             socket.emit('log', '📝 Preenchendo dados no painel...');
             
             const detection = await page.evaluate(async (prompts, assets) => {
                 const wait = (ms) => new Promise(r => setTimeout(r, ms));
-                
-                // Força a abertura do painel caso esteja oculto
                 const toggleBtn = document.querySelector('div[style*="z-index: 10001"]');
                 if (toggleBtn) toggleBtn.click();
-                await wait(1000);
+                await wait(1500);
 
                 const panel = document.getElementById('awu-panel');
                 if (!panel) return { error: "Painel não encontrado" };
 
-                // Validação do prefixo "Prompt" como solicitado
                 const formattedPrompts = prompts.map(p => `Prompt\n${p}`).join('\n\n');
                 
                 const textarea = panel.querySelector('textarea');
@@ -130,13 +140,13 @@ io.on('connection', (socket) => {
                 }
 
                 await wait(500);
-                
-                // Captura contagem de prompts do painel
                 const counterElement = panel.querySelector('.text-blue-400.font-bold') || panel.querySelector('span[style*="color"]');
                 const totalDetected = counterElement ? counterElement.innerText.replace(/\D/g, "") : prompts.length;
 
                 return { total: totalDetected };
             }, data.prompts, data.assets);
+
+            if (detection.error) throw new Error(detection.error);
 
             await sendScreenshot(socket, page, "Dados Preenchidos");
             socket.emit('automation-status', { 
