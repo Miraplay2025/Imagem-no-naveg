@@ -3,296 +3,152 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Auto Flow Ultra Pro</title>
+    <title>Controlador de Automação Pro</title>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background: #020617; color: #e2e8f0; font-family: 'Inter', sans-serif; }
-        .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; transition: all 0.3s; }
-        .mobile-field:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
-        
-        .log-box { 
-            font-size: 11px; 
-            max-height: 250px; 
-            overflow-y: auto; 
-            background: #000; 
-            padding: 12px; 
-            border-radius: 12px; 
-            border: 1px solid #334155;
-            font-family: 'Fira Code', monospace;
-            display: flex;
-            flex-direction: column-reverse;
-        }
-        .log-entry { margin-bottom: 4px; border-left: 3px solid #475569; padding-left: 8px; animation: slideIn 0.2s ease; }
-        @keyframes slideIn { from { opacity:0; transform: translateX(-5px); } to { opacity:1; transform: translateX(0); } }
-        .log-success { border-color: #10b981; color: #34d399; }
-        .log-error { border-color: #ef4444; color: #f87171; background: rgba(239, 68, 68, 0.1); }
-        .log-warning { border-color: #f59e0b; color: #fbbf24; }
-        .log-info { border-color: #3b82f6; color: #60a5fa; }
-
-        .screenshot-box { 
-            border: 2px solid #3b82f6; 
-            border-radius: 16px; 
-            overflow: hidden; 
-            background: #000;
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
-        }
-        
-        .asset-preview { width: 100%; height: 70px; object-fit: cover; border-radius: 8px; }
-        .asset-item { position: relative; }
-        
-        .remove-btn { 
-            position: absolute; top: -6px; right: -6px; 
-            background: #ef4444; color: white; border-radius: 50%; 
-            width: 20px; height: 20px; font-size: 12px; 
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; border: 2px solid #0f172a; font-weight: bold;
-            z-index: 10;
-        }
-        
-        .btn-main { transition: all 0.2s; }
-        .btn-main:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-main:active:not(:disabled) { transform: scale(0.98); }
-
-        /* Estilo para inputs obrigatórios pendentes */
-        .pending { border: 1px dashed #ef4444 !important; }
-        .loaded { border: 1px solid #10b981 !important; background: rgba(16, 185, 129, 0.05) !important; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: #fff; margin: 20px; display: flex; gap: 20px; }
+        .panel { background: #1e293b; padding: 20px; border-radius: 12px; border: 1px solid #334155; flex: 1; }
+        .logs { background: #000; color: #4ade80; padding: 15px; border-radius: 8px; height: 400px; overflow-y: auto; font-family: monospace; font-size: 13px; border: 1px solid #334155; }
+        .preview-container { width: 400px; background: #1e293b; padding: 20px; border-radius: 12px; border: 1px solid #334155; }
+        input, textarea, button { width: 100%; margin-bottom: 15px; padding: 10px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #fff; box-sizing: border-box; }
+        button { background: #2563eb; cursor: pointer; font-weight: bold; transition: 0.3s; border: none; }
+        button:hover { background: #3b82f6; }
+        button:disabled { background: #475569; cursor: not-allowed; }
+        .screenshot { width: 100%; border-radius: 8px; border: 2px solid #3b82f6; margin-top: 10px; }
+        #status-indicator { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: red; margin-right: 8px; }
+        .img-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 10px; }
+        .img-grid img { width: 100%; border-radius: 4px; border: 1px solid #475569; }
     </style>
 </head>
-<body class="p-4 flex flex-col items-center pb-20">
-    <div class="w-full max-w-md space-y-5">
-        <header class="text-center space-y-1">
-            <h1 class="text-2xl font-black tracking-tighter text-blue-500 italic">AUTO FLOW PRO</h1>
-            <p class="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Extension-Injected Automation</p>
-        </header>
+<body>
 
-        <div id="robot-view" class="hidden space-y-2">
-            <div class="flex justify-between items-center px-1">
-                <h2 id="view-title" class="text-[10px] font-bold text-blue-400 uppercase">Live Browser View</h2>
-                <span class="flex h-2 w-2 rounded-full bg-red-500 animate-pulse"></span>
-            </div>
-            <div class="screenshot-box">
-                <img id="screen-img" class="w-full">
-            </div>
-        </div>
-
-        <input id="flow-url" type="text" placeholder="Cole aqui o link do Projeto Flow" class="w-full p-4 mobile-field outline-none text-sm font-medium">
+    <div class="panel">
+        <h2><span id="status-indicator"></span> Automação Automática</h2>
         
-        <div class="grid grid-cols-3 gap-2">
-            <label id="label-extension" class="block p-3 text-center mobile-field cursor-pointer text-[10px] bg-slate-900/50 border-dashed border-2 border-slate-700 pending">
-                <span class="block text-lg mb-1">📦</span> EXTENSÃO
-                <input type="file" id="extension-file" class="hidden" accept=".zip">
-                <div id="extension-info" class="hidden mt-1 text-green-400 font-bold">✓ OK</div>
-            </label>
+        <label>Link do Projeto Google Flow:</label>
+        <input type="text" id="link" placeholder="https://labs.google/fx/..." value="">
 
-            <label id="label-cookies" class="block p-3 text-center mobile-field cursor-pointer text-[10px] bg-slate-900/50 border-dashed border-2 border-slate-700 pending">
-                <span class="block text-lg mb-1">🔑</span> COOKIES
-                <input type="file" id="cookies-file" class="hidden" accept=".json">
-                <div id="cookie-info" class="hidden mt-1 text-green-400 font-bold">✓ OK</div>
-            </label>
+        <label>Extensão (.zip):</label>
+        <input type="file" id="extensionZip" accept=".zip">
 
-            <label class="block p-3 text-center mobile-field cursor-pointer text-[10px] bg-slate-900/50 border-dashed border-2 border-slate-700 hover:border-blue-500">
-                <span class="block text-lg mb-1">🖼️</span> ASSETS
-                <input type="file" id="assets-file" class="hidden" multiple accept="image/*">
-                <div id="assets-count" class="hidden mt-1 text-blue-400 font-bold">0 un</div>
-            </label>
+        <label>Cookies (Base64 ou JSON):</label>
+        <textarea id="cookies" placeholder="Cole aqui o conteúdo dos cookies..."></textarea>
+
+        <label>Prompts (um por linha):</label>
+        <textarea id="prompts" rows="5" placeholder="Prompt 1&#10;Prompt 2..."></textarea>
+
+        <button id="btn-start">🚀 INICIAR SERVIDOR & NAVEGADOR</button>
+        <button id="btn-confirm" style="display:none; background: #16a34a;">✅ CONFIRMAR INÍCIO NA PÁGINA</button>
+        <button id="btn-stop" style="background: #dc2626;">🛑 PARAR TUDO</button>
+
+        <h3>Console de Operação</h3>
+        <div id="log-window" class="logs">
+            <div>Aguardando conexão com o servidor...</div>
         </div>
+    </div>
 
-        <div id="assets-preview-container" class="grid grid-cols-4 gap-2 hidden bg-slate-900/80 p-3 rounded-xl border border-slate-800"></div>
-
-        <div class="relative">
-            <textarea id="prompt-input" class="w-full p-4 mobile-field h-40 outline-none text-sm resize-none" placeholder="Prompt 1...&#10;Prompt 2..."></textarea>
-            <div class="absolute bottom-2 right-2 text-[9px] text-slate-500 font-mono" id="prompt-stats">Aguardando Prompts</div>
-        </div>
+    <div class="preview-container">
+        <h3>Live Preview</h3>
+        <div id="preview-title" style="font-size: 12px; color: #94a3b8; margin-bottom: 5px;">Nenhuma atividade...</div>
+        <img id="screenshot-view" class="screenshot" src="https://via.placeholder.com/400x250?text=Sem+Sinal" alt="Preview">
         
-        <button id="btn-start" class="btn-main w-full p-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black text-lg shadow-lg shadow-blue-900/20">INICIAR ROBÔ</button>
-        <button id="btn-stop" class="hidden btn-main w-full p-4 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-black text-lg">PARAR OPERAÇÃO</button>
-
-        <div id="confirm-box" class="hidden p-5 bg-blue-950/40 border-2 border-blue-500/50 rounded-2xl text-center space-y-4 backdrop-blur-sm">
-            <div class="space-y-1">
-                <p class="text-blue-400 font-black text-sm uppercase">Página e Extensão Carregadas</p>
-                <p class="text-[11px] text-slate-300 italic">O robô está posicionado. Confirmar início da automação?</p>
-            </div>
-            <button id="btn-confirm" class="w-full p-4 bg-blue-500 hover:bg-blue-400 text-white font-black rounded-xl">SIM, COMEÇAR AGORA</button>
-        </div>
-
-        <div class="space-y-2">
-            <p class="text-[10px] font-bold text-slate-500 uppercase px-1">Monitor do Sistema</p>
-            <div id="logs" class="log-box"></div>
-        </div>
-
-        <div id="results" class="space-y-4"></div>
+        <h3>Imagens Capturadas</h3>
+        <div id="captured-images" class="img-grid"></div>
     </div>
 
     <script>
         const socket = io();
-        let cookiesBase64 = null;
-        let extensionZipBase64 = null;
-        let referenceAssets = [];
-        const state = { prompts: [] };
+        const logWindow = document.getElementById('log-window');
+        const statusInd = document.getElementById('status-indicator');
+        const btnStart = document.getElementById('btn-start');
+        const btnConfirm = document.getElementById('btn-confirm');
 
-        // --- Leitura da Extensão (.zip) ---
-        document.getElementById('extension-file').onchange = (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                extensionZipBase64 = ev.target.result.split(',')[1];
-                document.getElementById('extension-info').classList.remove('hidden');
-                document.getElementById('label-extension').classList.replace('pending', 'loaded');
-                addLog("Extensão carregada com sucesso.", "success");
-            };
-            reader.readAsDataURL(file);
-        };
-
-        // --- Leitura de Cookies ---
-        document.getElementById('cookies-file').onchange = (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                try {
-                    JSON.parse(ev.target.result); // Valida se é JSON
-                    cookiesBase64 = btoa(unescape(encodeURIComponent(ev.target.result.trim())));
-                    document.getElementById('cookie-info').classList.remove('hidden');
-                    document.getElementById('label-cookies').classList.replace('pending', 'loaded');
-                    addLog("Cookies validados.", "success");
-                } catch(err) {
-                    addLog("Erro: O arquivo de cookies não é um JSON válido.", "error");
-                }
-            };
-            reader.readAsText(file);
-        };
-
-        // --- Referências (Assets) ---
-        document.getElementById('assets-file').onchange = async (e) => {
-            const files = Array.from(e.target.files);
-            for (const file of files) {
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                    referenceAssets.push({
-                        id: Math.random().toString(36).substr(2, 9),
-                        name: file.name,
-                        data: ev.target.result
-                    });
-                    renderAssets();
-                };
-                reader.readAsDataURL(file);
-            }
-            e.target.value = '';
-        };
-
-        function renderAssets() {
-            const container = document.getElementById('assets-preview-container');
-            const countLabel = document.getElementById('assets-count');
-            container.innerHTML = '';
-            if (referenceAssets.length > 0) {
-                container.classList.remove('hidden');
-                countLabel.classList.remove('hidden');
-                countLabel.textContent = `${referenceAssets.length} un`;
-                referenceAssets.forEach(asset => {
-                    const div = document.createElement('div');
-                    div.className = "asset-item";
-                    div.innerHTML = `<div class="remove-btn" onclick="removeAsset('${asset.id}')">×</div>
-                                     <img src="${asset.data}" class="asset-preview border border-slate-700">`;
-                    container.appendChild(div);
-                });
-            } else {
-                container.classList.add('hidden');
-                countLabel.classList.add('hidden');
-            }
+        function addLog(msg) {
+            const div = document.createElement('div');
+            div.style.padding = "2px 0";
+            div.innerHTML = `> ${msg}`;
+            logWindow.appendChild(div);
+            logWindow.scrollTop = logWindow.scrollHeight;
         }
 
-        window.removeAsset = (id) => {
-            referenceAssets = referenceAssets.filter(a => a.id !== id);
-            renderAssets();
-        };
+        socket.on('connect', () => {
+            statusInd.style.background = '#4ade80';
+            addLog('<span style="color: #4ade80">SISTEMA ONLINE: Pronto para automação.</span>');
+        });
 
-        // --- Processamento de Prompts ---
-        document.getElementById('prompt-input').oninput = (e) => {
-            const val = e.target.value.trim();
-            // Divide por quebra de linha se não houver a palavra "Prompt"
-            if (val.toLowerCase().includes("prompt")) {
-                const raw = val.split(/\bPrompt\b/i).slice(1);
-                state.prompts = raw.map(t => t.replace(/^[\s\d:.-]+/, "").trim()).filter(Boolean);
-            } else {
-                state.prompts = val.split('\n').map(l => l.trim()).filter(Boolean);
-            }
-            document.getElementById('prompt-stats').textContent = `${state.prompts.length} Prompts Prontos`;
-        };
-
-        // --- Ações de Socket ---
-        document.getElementById('btn-start').onclick = () => {
-            const url = document.getElementById('flow-url').value;
-            if (!url || !extensionZipBase64 || !cookiesBase64 || state.prompts.length === 0) {
-                addLog("Atenção: Todos os campos (URL, Extensão, Cookies e Prompts) são obrigatórios!", "warning");
-                return;
-            }
-            
-            addLog("Enviando dados ao servidor...", "info");
-            socket.emit('start-automation', {
-                link: url,
-                prompts: state.prompts,
-                cookiesBase64: cookiesBase64,
-                extensionZip: extensionZipBase64,
-                assets: referenceAssets 
-            });
-            document.getElementById('btn-start').classList.add('hidden');
-            document.getElementById('btn-stop').classList.remove('hidden');
-        };
+        socket.on('log', (msg) => addLog(msg));
 
         socket.on('screenshot-update', (data) => {
-            document.getElementById('robot-view').classList.remove('hidden');
-            document.getElementById('screen-img').src = data.img;
-            document.getElementById('view-title').textContent = data.title;
+            document.getElementById('screenshot-view').src = data.img;
+            document.getElementById('preview-title').innerText = data.title;
+        });
+
+        socket.on('new-images', (data) => {
+            addLog(`🖼️ Recebidas imagens do Prompt #${data.index}`);
+            const container = document.getElementById('captured-images');
+            data.urls.forEach(url => {
+                const img = document.createElement('img');
+                img.src = url;
+                container.prepend(img);
+            });
         });
 
         socket.on('automation-status', (data) => {
-            if (data.showConfirm) document.getElementById('confirm-box').classList.remove('hidden');
+            addLog(`📢 STATUS: ${data.msg}`);
+            if (data.showConfirm) {
+                btnConfirm.style.display = 'block';
+                btnStart.style.display = 'none';
+            }
         });
 
-        document.getElementById('btn-confirm').onclick = () => {
-            socket.emit('confirm-start');
-            document.getElementById('confirm-box').classList.add('hidden');
-            addLog("Operação confirmada. Iniciando interação com o painel...", "success");
+        btnStart.onclick = async () => {
+            const extensionFile = document.getElementById('extensionZip').files[0];
+            const cookiesRaw = document.getElementById('cookies').value;
+            const prompts = document.getElementById('prompts').value.split('\n').filter(p => p.trim() !== "");
+            const link = document.getElementById('link').value;
+
+            if (!extensionFile || !cookiesRaw || prompts.length === 0 || !link) {
+                alert("Preencha todos os campos!");
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.readAsDataURL(extensionFile);
+            reader.onload = () => {
+                const base64Zip = reader.result.split(',')[1];
+                let base64Cookies = cookiesRaw;
+                try {
+                    JSON.parse(cookiesRaw);
+                    base64Cookies = btoa(unescape(encodeURIComponent(cookiesRaw)));
+                } catch(e) {}
+
+                socket.emit('start-automation', {
+                    extensionZip: base64Zip,
+                    cookiesBase64: base64Cookies,
+                    prompts: prompts,
+                    link: link,
+                    assets: []
+                });
+            };
         };
 
-        socket.on('log', (msg) => {
-            let type = "info";
-            if (msg.includes("❌") || msg.toLowerCase().includes("erro")) type = "error";
-            if (msg.includes("✅") || msg.toLowerCase().includes("sucesso")) type = "success";
-            addLog(msg, type);
-        });
+        btnConfirm.onclick = () => {
+            socket.emit('confirm-start');
+            btnConfirm.style.display = 'none';
+            addLog("🚀 Injeção de comandos iniciada!");
+        };
 
-        function addLog(msg, type) {
-            const logBox = document.getElementById('logs');
-            const entry = document.createElement('div');
-            entry.className = `log-entry log-${type}`;
-            const time = new Date().toLocaleTimeString('pt-BR', { hour12: false });
-            entry.innerHTML = `<span class="opacity-40 text-[9px] mr-2">${time}</span> ${msg}`;
-            logBox.appendChild(entry);
-            logBox.scrollTop = logBox.scrollHeight;
-        }
-
-        socket.on('new-images', (data) => {
-            const div = document.createElement('div');
-            div.className = "bg-slate-900/80 p-3 rounded-2xl border border-slate-800 space-y-2 animate-bounce";
-            div.innerHTML = `
-                <div class="flex justify-between items-center text-[10px] px-1">
-                    <span class="text-blue-400 font-bold uppercase">Prompt #${data.index} - Capturado</span>
-                    <span class="text-slate-500 font-mono">${new Date().toLocaleTimeString()}</span>
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                    ${data.urls.map(u => `<img src="${u}" class="rounded-xl border border-slate-700 hover:scale-[1.02] transition-all">`).join('')}
-                </div>
-            `;
-            document.getElementById('results').prepend(div);
-            setTimeout(() => div.classList.remove('animate-bounce'), 1000);
-        });
-
-        document.getElementById('btn-stop').onclick = () => { 
-            socket.emit('stop-automation'); 
-            setTimeout(() => location.reload(), 1000);
+        // ALTERAÇÃO AQUI: Removido location.reload()
+        document.getElementById('btn-stop').onclick = () => {
+            socket.emit('stop-automation');
+            addLog('<span style="color: #dc2626">🛑 Automação interrompida pelo usuário.</span>');
+            
+            // Reseta a visibilidade dos botões para permitir novo início sem recarregar
+            btnStart.style.display = 'block';
+            btnConfirm.style.display = 'none';
+            
+            // Limpa o preview para indicar que parou
+            document.getElementById('screenshot-view').src = "https://via.placeholder.com/400x250?text=Sessão+Encerrada";
         };
     </script>
 </body>
