@@ -25,8 +25,7 @@ const EXTENSION_DIR = path.join(__dirname, 'temp_extension');
 async function sendScreenshot(socket, page, title) {
     if (page && !page.isClosed()) {
         try {
-            // Pequena espera para garantir que o buffer de imagem esteja pronto
-            await new Promise(r => setTimeout(r, 500));
+            await new Promise(r => setTimeout(r, 800)); // Buffer para renderização
             const screenshot = await page.screenshot({ encoding: 'base64', fullPage: false });
             socket.emit('screenshot-update', { 
                 img: `data:image/png;base64,${screenshot}`, 
@@ -53,11 +52,11 @@ io.on('connection', (socket) => {
     socket.on('start-automation', async (data) => {
         try {
             if (!data.extensionZip || !data.prompts || !data.cookiesBase64) {
-                socket.emit('log', '⚠️ Erro: Dados insuficientes para iniciar.');
+                socket.emit('log', '⚠️ Erro: Dados insuficientes.');
                 return;
             }
 
-            socket.emit('log', '📦 Extraindo extensão...');
+            socket.emit('log', '📦 Preparando Extensão...');
             if (fs.existsSync(EXTENSION_DIR)) fs.rmSync(EXTENSION_DIR, { recursive: true, force: true });
             fs.mkdirSync(EXTENSION_DIR, { recursive: true });
             
@@ -66,7 +65,7 @@ io.on('connection', (socket) => {
             fs.writeFileSync(zipPath, zipBuffer);
             await fs.createReadStream(zipPath).pipe(unzipper.Extract({ path: EXTENSION_DIR })).promise();
             
-            socket.emit('log', '🚀 Lançando navegador...');
+            socket.emit('log', '🚀 Iniciando Navegador Seguro...');
             browser = await puppeteer.launch({
                 headless: 'new', 
                 args: [
@@ -74,6 +73,7 @@ io.on('connection', (socket) => {
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
+                    '--disable-web-security',
                     `--disable-extensions-except=${EXTENSION_DIR}`,
                     `--load-extension=${EXTENSION_DIR}`,
                     '--window-size=1280,800'
@@ -84,69 +84,73 @@ io.on('connection', (socket) => {
             page = pages.length > 0 ? pages[0] : await browser.newPage();
             page.setDefaultTimeout(60000);
 
+            // Injeta Cookies
             const decoded = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
             await page.setCookie(...JSON.parse(decoded));
             
-            socket.emit('log', `🌐 Navegando para: ${data.link}`);
+            socket.emit('log', `🌐 Acessando Flow: ${data.link}`);
             
-            // Navegação com tratamento para evitar "Main frame too early"
-            try {
-                await page.goto(data.link, { waitUntil: 'domcontentloaded', timeout: 60000 });
-                // Espera extra para estabilização de rede
-                await page.waitForNetworkIdle({ idleTime: 1000, timeout: 10000 }).catch(() => {});
-            } catch (e) {
-                socket.emit('log', `⚠️ Aviso de carregamento: ${e.message}`);
-            }
+            await page.goto(data.link, { waitUntil: 'networkidle2', timeout: 60000 });
 
-            // --- ETAPA SOLICITADA: PRINT E VERIFICAÇÃO ANTES DE QUALQUER INTERAÇÃO ---
-            socket.emit('log', '📸 Verificando integridade da página...');
-            await sendScreenshot(socket, page, "PÁGINA INICIAL (PRÉ-INTERAÇÃO)");
+            // --- VERIFICAÇÃO DE CARREGAMENTO 100% ---
+            socket.emit('log', '⏳ Aguardando estabilização total da página...');
+            await page.waitForFunction(() => document.body && document.body.innerText.length > 100);
+            await new Promise(r => setTimeout(r, 3000)); // Pausa técnica para a extensão "acordar"
 
-            const currentUrl = page.url();
-            if (!currentUrl.includes("labs.google") || currentUrl.includes("signin")) {
-                socket.emit('log', `⚠️ REDIRECIONAMENTO DETECTADO: ${currentUrl}`);
-                await sendScreenshot(socket, page, "TELA DE REDIRECIONAMENTO/LOGIN");
-                // Não interrompe, mas avisa o usuário
-            }
-            // -----------------------------------------------------------------------
+            // Screenshot inicial para o usuário validar
+            await sendScreenshot(socket, page, "PÁGINA CARREGADA (VERIFICAÇÃO)");
 
-            socket.emit('log', '📝 Preparando injeção no painel...');
+            socket.emit('log', '📝 Tentando localizar painel da extensão...');
             
+            // --- LÓGICA DE DETECÇÃO COM RETRY ---
             const detection = await page.evaluate(async (prompts, assets) => {
-                const wait = (ms) => new Promise(r => setTimeout(r, ms));
+                const sleep = (ms) => new Promise(r => setTimeout(r, ms));
                 
-                // Busca o botão de toggle da sua extensão
-                const toggleBtn = document.querySelector('div[style*="z-index: 10001"]');
-                if (toggleBtn) {
-                    toggleBtn.click();
-                    await wait(2000); // Tempo para o painel abrir
+                let attempts = 0;
+                let found = false;
+
+                while (attempts < 5 && !found) {
+                    // Tenta clicar no botão de olho/toggle (Z-INDEX 10001 ou 30000)
+                    const toggle = document.querySelector('div[style*="z-index: 10001"]') || 
+                                   document.querySelector('div[style*="z-index: 10000"]');
+                    
+                    if (toggle) {
+                        toggle.click();
+                        await sleep(1500);
+                    }
+
+                    const panel = document.getElementById('awu-panel');
+                    if (panel) {
+                        found = true;
+                        // Injeta os dados
+                        const textarea = panel.querySelector('textarea');
+                        if (textarea) {
+                            textarea.value = prompts.map(p => `Prompt\n${p}`).join('\n\n');
+                            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                        }
+                        if (assets) localStorage.setItem("flow_persistent_assets_v3", JSON.stringify(assets));
+                        
+                        return { success: true, total: prompts.length };
+                    }
+
+                    attempts++;
+                    await sleep(2000); // Espera 2s antes da próxima tentativa
                 }
 
-                const panel = document.getElementById('awu-panel');
-                if (!panel) return { error: "Painel não localizado. Verifique se a extensão carregou." };
-
-                const textarea = panel.querySelector('textarea');
-                if (textarea) {
-                    textarea.value = prompts.map(p => `Prompt\n${p}`).join('\n\n');
-                    textarea.dispatchEvent(new Event('input', { bubbles: true }));
-                }
-
-                if (assets) localStorage.setItem("flow_persistent_assets_v3", JSON.stringify(assets));
-
-                await wait(1000);
-                const counter = panel.querySelector('.text-blue-400.font-bold') || panel.querySelector('span[style*="color"]');
-                return { total: counter ? counter.innerText.replace(/\D/g, "") : prompts.length };
+                return { success: false, error: "Extensão não respondeu após 5 tentativas. Verifique o print." };
             }, data.prompts, data.assets);
 
-            if (detection.error) throw new Error(detection.error);
+            if (!detection.success) {
+                throw new Error(detection.error);
+            }
 
-            await sendScreenshot(socket, page, "PAINEL PRONTO");
+            socket.emit('log', `✅ Sucesso: ${detection.total} prompts injetados.`);
+            await sendScreenshot(socket, page, "PAINEL PRONTO PARA INICIAR");
+            
             socket.emit('automation-status', { 
-                msg: `Detectados ${detection.total} prompts. Iniciar execução?`, 
+                msg: `Pronto! Clique em confirmar para dar o START final.`, 
                 showConfirm: true 
             });
-            
-            page.automationData = data;
 
         } catch (err) {
             await reportError(socket, page, err.message);
@@ -156,35 +160,25 @@ io.on('connection', (socket) => {
     socket.on('confirm-start', async () => {
         if (!page) return;
         try {
-            await page.exposeFunction('sendScreenshotToNode', (title) => sendScreenshot(socket, page, title));
-
-            page.on('console', async msg => {
+            socket.emit('log', '⚡ Enviando comando de START para a extensão...');
+            
+            page.on('console', msg => {
                 const text = msg.text();
                 if (text.startsWith('[EXT_PANEL_LOG]|')) socket.emit('log', text.split('|')[1]);
-                if (text.includes('[IMAGES]')) {
-                    const parts = text.split('|');
-                    const base64Images = await page.evaluate(async (urls) => {
-                        const conv = async (u) => {
-                            const r = await fetch(u);
-                            const b = await r.blob();
-                            return new Promise(res => {
-                                const rd = new FileReader();
-                                rd.onloadend = () => res(rd.result);
-                                rd.readAsDataURL(b);
-                            });
-                        };
-                        return Promise.all(urls.map(u => conv(u)));
-                    }, JSON.parse(parts[2]));
-                    socket.emit('new-images', { index: parts[1], urls: base64Images });
-                }
             });
 
             await page.evaluate(() => {
-                const btn = [...document.querySelectorAll('button')].find(b => b.innerText.includes('INICIAR') || b.innerText.includes('START'));
+                const btn = [...document.querySelectorAll('button')].find(b => 
+                    b.innerText.includes('INICIAR') || 
+                    b.innerText.includes('START') ||
+                    b.innerText.includes('SIM')
+                );
                 if (btn) btn.click();
             });
+            
+            socket.emit('log', '🚀 Operação em andamento...');
         } catch (err) {
-            await reportError(socket, page, `Erro no início: ${err.message}`);
+            await reportError(socket, page, `Erro ao clicar no Start: ${err.message}`);
         }
     });
 
@@ -192,12 +186,12 @@ io.on('connection', (socket) => {
         if (browser) {
             await browser.close();
             browser = null; page = null;
-            socket.emit('log', '🛑 Navegador encerrado.');
+            socket.emit('log', '🛑 Navegador encerrado pelo usuário.');
         }
     });
 
-    socket.on('disconnect', () => console.log('Cliente saiu.'));
+    socket.on('disconnect', () => console.log('Cliente desconectado.'));
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 SERVER ONLINE NA PORTA ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 SERVER ULTRA PRO ONLINE NA PORTA ${PORT}`));
