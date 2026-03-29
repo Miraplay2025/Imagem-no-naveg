@@ -20,12 +20,13 @@ app.use(express.static('public'));
 
 let browser = null;
 let page = null;
-const EXTENSION_DIR = path.join(__dirname, 'temp_extension');
+const EXTENSION_DIR = path.resolve(__dirname, 'temp_extension');
+const USER_DATA_DIR = path.resolve(__dirname, 'puppeteer_profile');
 
 async function sendScreenshot(socket, page, title) {
     if (page && !page.isClosed()) {
         try {
-            await new Promise(r => setTimeout(r, 800)); // Buffer para renderização
+            await new Promise(r => setTimeout(r, 1000)); 
             const screenshot = await page.screenshot({ encoding: 'base64', fullPage: false });
             socket.emit('screenshot-update', { 
                 img: `data:image/png;base64,${screenshot}`, 
@@ -42,7 +43,6 @@ async function reportError(socket, page, errorMsg) {
         await sendScreenshot(socket, page, "❌ ESTADO DO ERRO");
     }
     socket.emit('log', `❌ LOG DE ERRO: ${errorMsg}`);
-    console.error(`[Erro]: ${errorMsg}`);
 }
 
 io.on('connection', (socket) => {
@@ -56,18 +56,28 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            socket.emit('log', '📦 Preparando Extensão...');
+            // 1. Limpeza e Extração
+            socket.emit('log', '📦 Extraindo extensão...');
             if (fs.existsSync(EXTENSION_DIR)) fs.rmSync(EXTENSION_DIR, { recursive: true, force: true });
             fs.mkdirSync(EXTENSION_DIR, { recursive: true });
             
             const zipBuffer = Buffer.from(data.extensionZip, 'base64');
             const zipPath = path.join(__dirname, 'extension.zip');
             fs.writeFileSync(zipPath, zipBuffer);
-            await fs.createReadStream(zipPath).pipe(unzipper.Extract({ path: EXTENSION_DIR })).promise();
             
-            socket.emit('log', '🚀 Iniciando Navegador Seguro...');
+            await fs.createReadStream(zipPath)
+                .pipe(unzipper.Extract({ path: EXTENSION_DIR }))
+                .promise();
+
+            // Verificar se o manifest está na raiz da pasta extraída
+            const files = fs.readdirSync(EXTENSION_DIR);
+            socket.emit('log', `📂 Arquivos extraídos: ${files.join(', ')}`);
+
+            // 2. Lançamento do Navegador com Perfil Persistente
+            socket.emit('log', '🚀 Lançando navegador com extensão...');
             browser = await puppeteer.launch({
-                headless: 'new', 
+                headless: 'new',
+                userDataDir: USER_DATA_DIR, // Ajuda a manter a extensão carregada
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
@@ -82,73 +92,59 @@ io.on('connection', (socket) => {
 
             const pages = await browser.pages();
             page = pages.length > 0 ? pages[0] : await browser.newPage();
-            page.setDefaultTimeout(60000);
-
-            // Injeta Cookies
-            const decoded = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
-            await page.setCookie(...JSON.parse(decoded));
             
-            socket.emit('log', `🌐 Acessando Flow: ${data.link}`);
+            // 3. Cookies e Navegação
+            const decodedCookies = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
+            await page.setCookie(...JSON.parse(decodedCookies));
             
-            await page.goto(data.link, { waitUntil: 'networkidle2', timeout: 60000 });
+            socket.emit('log', `🌐 Carregando página do Flow...`);
+            await page.goto(data.link, { waitUntil: 'networkidle2', timeout: 90000 });
 
-            // --- VERIFICAÇÃO DE CARREGAMENTO 100% ---
-            socket.emit('log', '⏳ Aguardando estabilização total da página...');
-            await page.waitForFunction(() => document.body && document.body.innerText.length > 100);
-            await new Promise(r => setTimeout(r, 3000)); // Pausa técnica para a extensão "acordar"
+            // Aguarda a página e dá um tempo extra para scripts da extensão injetarem
+            await page.waitForFunction(() => document.body && document.body.innerText.length > 50);
+            socket.emit('log', '⏳ Aguardando injeção da extensão (5s)...');
+            await new Promise(r => setTimeout(r, 5000));
 
-            // Screenshot inicial para o usuário validar
-            await sendScreenshot(socket, page, "PÁGINA CARREGADA (VERIFICAÇÃO)");
+            await sendScreenshot(socket, page, "VERIFICAÇÃO DE CARREGAMENTO");
 
-            socket.emit('log', '📝 Tentando localizar painel da extensão...');
-            
-            // --- LÓGICA DE DETECÇÃO COM RETRY ---
-            const detection = await page.evaluate(async (prompts, assets) => {
-                const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+            // 4. Detecção e Injeção de Dados
+            socket.emit('log', '📝 Localizando painel...');
+            const result = await page.evaluate(async (prompts, assets) => {
+                const wait = (ms) => new Promise(r => setTimeout(r, ms));
                 
-                let attempts = 0;
-                let found = false;
-
-                while (attempts < 5 && !found) {
-                    // Tenta clicar no botão de olho/toggle (Z-INDEX 10001 ou 30000)
-                    const toggle = document.querySelector('div[style*="z-index: 10001"]') || 
-                                   document.querySelector('div[style*="z-index: 10000"]');
+                // Tenta abrir o painel clicando no botão de toggle da sua extensão
+                for(let i=0; i<5; i++) {
+                    const btn = document.querySelector('div[style*="z-index: 10001"]') || 
+                                document.querySelector('div[style*="z-index: 30000"]');
                     
-                    if (toggle) {
-                        toggle.click();
-                        await sleep(1500);
-                    }
+                    if (btn) btn.click();
+                    await wait(1500);
 
                     const panel = document.getElementById('awu-panel');
                     if (panel) {
-                        found = true;
-                        // Injeta os dados
-                        const textarea = panel.querySelector('textarea');
-                        if (textarea) {
-                            textarea.value = prompts.map(p => `Prompt\n${p}`).join('\n\n');
-                            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                        // Preenche os prompts
+                        const txt = panel.querySelector('textarea');
+                        if (txt) {
+                            txt.value = prompts.map(p => `Prompt\n${p}`).join('\n\n');
+                            txt.dispatchEvent(new Event('input', { bubbles: true }));
                         }
                         if (assets) localStorage.setItem("flow_persistent_assets_v3", JSON.stringify(assets));
-                        
-                        return { success: true, total: prompts.length };
+                        return { success: true };
                     }
-
-                    attempts++;
-                    await sleep(2000); // Espera 2s antes da próxima tentativa
+                    await wait(1000);
                 }
-
-                return { success: false, error: "Extensão não respondeu após 5 tentativas. Verifique o print." };
+                return { success: false };
             }, data.prompts, data.assets);
 
-            if (!detection.success) {
-                throw new Error(detection.error);
+            if (!result.success) {
+                throw new Error("Extensão instalada, mas o painel 'awu-panel' não apareceu.");
             }
 
-            socket.emit('log', `✅ Sucesso: ${detection.total} prompts injetados.`);
-            await sendScreenshot(socket, page, "PAINEL PRONTO PARA INICIAR");
+            socket.emit('log', '✅ Extensão pronta e carregada!');
+            await sendScreenshot(socket, page, "PAINEL LOCALIZADO");
             
             socket.emit('automation-status', { 
-                msg: `Pronto! Clique em confirmar para dar o START final.`, 
+                msg: `Extensão detectada com sucesso. Iniciar?`, 
                 showConfirm: true 
             });
 
@@ -160,25 +156,15 @@ io.on('connection', (socket) => {
     socket.on('confirm-start', async () => {
         if (!page) return;
         try {
-            socket.emit('log', '⚡ Enviando comando de START para a extensão...');
-            
-            page.on('console', msg => {
-                const text = msg.text();
-                if (text.startsWith('[EXT_PANEL_LOG]|')) socket.emit('log', text.split('|')[1]);
-            });
-
+            socket.emit('log', '⚡ Iniciando fluxo automático...');
             await page.evaluate(() => {
-                const btn = [...document.querySelectorAll('button')].find(b => 
-                    b.innerText.includes('INICIAR') || 
-                    b.innerText.includes('START') ||
-                    b.innerText.includes('SIM')
+                const startBtn = [...document.querySelectorAll('button')].find(b => 
+                    b.innerText.includes('INICIAR') || b.innerText.includes('START')
                 );
-                if (btn) btn.click();
+                if (startBtn) startBtn.click();
             });
-            
-            socket.emit('log', '🚀 Operação em andamento...');
         } catch (err) {
-            await reportError(socket, page, `Erro ao clicar no Start: ${err.message}`);
+            await reportError(socket, page, `Erro no Start: ${err.message}`);
         }
     });
 
@@ -186,12 +172,10 @@ io.on('connection', (socket) => {
         if (browser) {
             await browser.close();
             browser = null; page = null;
-            socket.emit('log', '🛑 Navegador encerrado pelo usuário.');
+            socket.emit('log', '🛑 Navegador encerrado.');
         }
     });
-
-    socket.on('disconnect', () => console.log('Cliente desconectado.'));
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 SERVER ULTRA PRO ONLINE NA PORTA ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 SERVER ONLINE NA PORTA ${PORT}`));
