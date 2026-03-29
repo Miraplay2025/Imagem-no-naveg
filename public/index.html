@@ -13,7 +13,7 @@
         
         .log-box { 
             font-size: 11px; 
-            max-height: 250px; 
+            height: 250px; 
             overflow-y: auto; 
             background: #000; 
             padding: 12px; 
@@ -21,9 +21,9 @@
             border: 1px solid #334155;
             font-family: 'Fira Code', monospace;
             display: flex;
-            flex-direction: column-reverse;
+            flex-direction: column;
         }
-        .log-entry { margin-bottom: 4px; border-left: 3px solid #475569; padding-left: 8px; animation: slideIn 0.2s ease; }
+        .log-entry { margin-bottom: 4px; border-left: 3px solid #475569; padding-left: 8px; animation: slideIn 0.2s ease; flex-shrink: 0; }
         @keyframes slideIn { from { opacity:0; transform: translateX(-5px); } to { opacity:1; transform: translateX(0); } }
         .log-success { border-color: #10b981; color: #34d399; }
         .log-error { border-color: #ef4444; color: #f87171; background: rgba(239, 68, 68, 0.1); }
@@ -62,7 +62,7 @@
     <div class="w-full max-w-md space-y-5">
         <header class="text-center space-y-1">
             <h1 class="text-2xl font-black tracking-tighter text-blue-500 italic">AUTO FLOW PRO</h1>
-            <p class="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Extension-Injected Automation</p>
+            <p class="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Injected Browser Automation</p>
         </header>
 
         <div id="robot-view" class="hidden space-y-2">
@@ -71,11 +71,11 @@
                 <span class="flex h-2 w-2 rounded-full bg-red-500 animate-pulse"></span>
             </div>
             <div class="screenshot-box">
-                <img id="screen-img" class="w-full">
+                <img id="screen-img" class="w-full" src="">
             </div>
         </div>
 
-        <input id="flow-url" type="text" placeholder="Cole aqui o link do Projeto Flow" class="w-full p-4 mobile-field outline-none text-sm font-medium">
+        <input id="flow-url" type="text" placeholder="Link do Projeto Flow" class="w-full p-4 mobile-field outline-none text-sm font-medium">
         
         <div class="grid grid-cols-3 gap-2">
             <label id="label-extension" class="block p-3 text-center mobile-field cursor-pointer text-[10px] bg-slate-900/50 border-dashed border-2 border-slate-700 pending">
@@ -109,10 +109,10 @@
 
         <div id="confirm-box" class="hidden p-5 bg-blue-950/40 border-2 border-blue-500/50 rounded-2xl text-center space-y-4 backdrop-blur-sm">
             <div class="space-y-1">
-                <p class="text-blue-400 font-black text-sm uppercase">Página e Extensão Carregadas</p>
-                <p class="text-[11px] text-slate-300 italic">O robô está posicionado. Confirmar início da automação?</p>
+                <p class="text-blue-400 font-black text-sm uppercase">Página Detectada</p>
+                <p class="text-[11px] text-slate-300 italic">Verifique o print acima. Se a página estiver correta, clique abaixo para injetar os dados.</p>
             </div>
-            <button id="btn-confirm" class="w-full p-4 bg-blue-500 hover:bg-blue-400 text-white font-black rounded-xl">SIM, COMEÇAR AGORA</button>
+            <button id="btn-confirm" class="w-full p-4 bg-blue-500 hover:bg-blue-400 text-white font-black rounded-xl">INJETAR E INICIAR</button>
         </div>
 
         <div class="space-y-2">
@@ -130,6 +130,7 @@
         let referenceAssets = [];
         const state = { prompts: [] };
 
+        // Carregar Extensão
         document.getElementById('extension-file').onchange = (e) => {
             const file = e.target.files[0];
             if (!file) return;
@@ -138,29 +139,32 @@
                 extensionZipBase64 = ev.target.result.split(',')[1];
                 document.getElementById('extension-info').classList.remove('hidden');
                 document.getElementById('label-extension').classList.replace('pending', 'loaded');
-                addLog("Extensão carregada com sucesso.", "success");
+                addLog("📦 Extensão preparada.", "success");
             };
             reader.readAsDataURL(file);
         };
 
+        // Carregar Cookies (Validação de JSON para evitar erro de servidor)
         document.getElementById('cookies-file').onchange = (e) => {
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
             reader.onload = (ev) => {
                 try {
-                    JSON.parse(ev.target.result);
-                    cookiesBase64 = btoa(unescape(encodeURIComponent(ev.target.result.trim())));
+                    const cleanJson = ev.target.result.trim();
+                    JSON.parse(cleanJson); // Valida
+                    cookiesBase64 = btoa(unescape(encodeURIComponent(cleanJson)));
                     document.getElementById('cookie-info').classList.remove('hidden');
                     document.getElementById('label-cookies').classList.replace('pending', 'loaded');
-                    addLog("Cookies validados.", "success");
+                    addLog("🔑 Cookies validados.", "success");
                 } catch(err) {
-                    addLog("Erro: O arquivo de cookies não é um JSON válido.", "error");
+                    addLog("❌ ERRO: Arquivo de cookies inválido!", "error");
                 }
             };
             reader.readAsText(file);
         };
 
+        // Carregar Assets
         document.getElementById('assets-file').onchange = async (e) => {
             const files = Array.from(e.target.files);
             for (const file of files) {
@@ -204,6 +208,7 @@
             renderAssets();
         };
 
+        // Processamento de Prompts
         document.getElementById('prompt-input').oninput = (e) => {
             const val = e.target.value.trim();
             if (val.toLowerCase().includes("prompt")) {
@@ -212,17 +217,19 @@
             } else {
                 state.prompts = val.split('\n').map(l => l.trim()).filter(Boolean);
             }
-            document.getElementById('prompt-stats').textContent = `${state.prompts.length} Prompts Prontos`;
+            document.getElementById('prompt-stats').textContent = `${state.prompts.length} Prompts Detectados`;
         };
 
+        // Iniciar
         document.getElementById('btn-start').onclick = () => {
             const url = document.getElementById('flow-url').value;
             if (!url || !extensionZipBase64 || !cookiesBase64 || state.prompts.length === 0) {
-                addLog("Atenção: Campos obrigatórios faltando!", "warning");
+                addLog("⚠️ Preencha Link, Extensão, Cookies e Prompts!", "warning");
                 return;
             }
             socket.emit('start-automation', {
-                link: url, prompts: state.prompts,
+                link: url, 
+                prompts: state.prompts,
                 cookiesBase64: cookiesBase64,
                 extensionZip: extensionZipBase64,
                 assets: referenceAssets 
@@ -231,26 +238,36 @@
             document.getElementById('btn-stop').classList.remove('hidden');
         };
 
+        // WebSocket: Receber Print (Compatível com o novo fluxo de print pré-interação)
         socket.on('screenshot-update', (data) => {
             document.getElementById('robot-view').classList.remove('hidden');
             document.getElementById('screen-img').src = data.img;
             document.getElementById('view-title').textContent = data.title;
+            // Faz scroll automático para o print novo
+            document.getElementById('robot-view').scrollIntoView({ behavior: 'smooth' });
         });
 
+        // WebSocket: Status de Automação
         socket.on('automation-status', (data) => {
-            if (data.showConfirm) document.getElementById('confirm-box').classList.remove('hidden');
+            if (data.showConfirm) {
+                document.getElementById('confirm-box').classList.remove('hidden');
+                addLog("👀 Verifique o print! Se estiver OK, confirme o início.", "warning");
+            }
         });
 
+        // Confirmar Início
         document.getElementById('btn-confirm').onclick = () => {
             socket.emit('confirm-start');
             document.getElementById('confirm-box').classList.add('hidden');
-            addLog("Operação confirmada. Iniciando...", "success");
+            addLog("🚀 Injeção confirmada. Iniciando fluxo...", "success");
         };
 
+        // WebSocket: Logs do Servidor
         socket.on('log', (msg) => {
             let type = "info";
             if (msg.includes("❌") || msg.toLowerCase().includes("erro")) type = "error";
             if (msg.includes("✅") || msg.toLowerCase().includes("sucesso")) type = "success";
+            if (msg.includes("⚠️") || msg.toLowerCase().includes("aviso")) type = "warning";
             addLog(msg, type);
         });
 
@@ -264,6 +281,7 @@
             logBox.scrollTop = logBox.scrollHeight;
         }
 
+        // Receber Imagens Geradas
         socket.on('new-images', (data) => {
             const div = document.createElement('div');
             div.className = "bg-slate-900/80 p-3 rounded-2xl border border-slate-800 space-y-2 animate-bounce";
@@ -272,19 +290,18 @@
                     <span class="text-blue-400 font-bold uppercase">Prompt #${data.index}</span>
                 </div>
                 <div class="grid grid-cols-2 gap-2">
-                    ${data.urls.map(u => `<img src="${u}" class="rounded-xl border border-slate-700">`).join('')}
+                    ${data.urls.map(u => `<img src="${u}" class="rounded-xl border border-slate-700 shadow-lg">`).join('')}
                 </div>
             `;
             document.getElementById('results').prepend(div);
             setTimeout(() => div.classList.remove('animate-bounce'), 1000);
         });
 
-        // --- ATUALIZADO: PARAR SEM RECARREGAR ---
+        // Parar e Resetar
         document.getElementById('btn-stop').onclick = () => { 
             socket.emit('stop-automation'); 
-            addLog("Comando de parada enviado. Limpando sessão...", "warning");
+            addLog("🛑 Parando navegador e resetando sessão...", "warning");
             
-            // Reseta a UI sem recarregar a página
             document.getElementById('btn-stop').classList.add('hidden');
             document.getElementById('btn-start').classList.remove('hidden');
             document.getElementById('confirm-box').classList.add('hidden');
