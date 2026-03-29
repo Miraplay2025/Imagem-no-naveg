@@ -73,11 +73,19 @@ io.on('connection', (socket) => {
             
             socket.emit('log', '✅ Extensão extraída.');
 
+            // --- CORREÇÃO DO ERRO DE LAUNCH ---
             browser = await puppeteer.launch({
-                headless: false,
+                // Se estiver no servidor, use 'new' para rodar sem janela. 
+                // Note que extensões normalmente exigem headless: false. 
+                // Para rodar extensões em servidor Linux, usamos as flags abaixo:
+                headless: 'new', 
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--no-zygote',
+                    '--single-process',
                     `--disable-extensions-except=${EXTENSION_DIR}`,
                     `--load-extension=${EXTENSION_DIR}`,
                     '--window-size=1280,800'
@@ -95,11 +103,12 @@ io.on('connection', (socket) => {
             socket.emit('log', `🌐 Navegando para: ${data.link}`);
             await page.goto(data.link, { waitUntil: 'networkidle2' });
 
-            // --- LÓGICA DE PREENCHIMENTO E DETECÇÃO ANTES DA CONFIRMAÇÃO ---
             socket.emit('log', '📝 Preenchendo dados no painel...');
             
             const detection = await page.evaluate(async (prompts, assets) => {
                 const wait = (ms) => new Promise(r => setTimeout(r, ms));
+                
+                // Força a abertura do painel caso esteja oculto
                 const toggleBtn = document.querySelector('div[style*="z-index: 10001"]');
                 if (toggleBtn) toggleBtn.click();
                 await wait(1000);
@@ -107,7 +116,7 @@ io.on('connection', (socket) => {
                 const panel = document.getElementById('awu-panel');
                 if (!panel) return { error: "Painel não encontrado" };
 
-                // Formata prompts com o prefixo obrigatório
+                // Validação do prefixo "Prompt" como solicitado
                 const formattedPrompts = prompts.map(p => `Prompt\n${p}`).join('\n\n');
                 
                 const textarea = panel.querySelector('textarea');
@@ -122,7 +131,7 @@ io.on('connection', (socket) => {
 
                 await wait(500);
                 
-                // Busca o número total de prompts exibido na interface (usando a classe de contador)
+                // Captura contagem de prompts do painel
                 const counterElement = panel.querySelector('.text-blue-400.font-bold') || panel.querySelector('span[style*="color"]');
                 const totalDetected = counterElement ? counterElement.innerText.replace(/\D/g, "") : prompts.length;
 
@@ -148,8 +157,6 @@ io.on('connection', (socket) => {
         try {
             await page.exposeFunction('sendScreenshotToNode', (title) => sendScreenshot(socket, page, title));
 
-            // --- MONITORAMENTO DE LOGS DO PAINEL DA EXTENSÃO ---
-            // Esta função observa mudanças na div de logs da extensão e envia para o HTML
             await page.evaluate(() => {
                 const logDiv = document.querySelector("#awu-log");
                 if (logDiv) {
@@ -167,13 +174,10 @@ io.on('connection', (socket) => {
 
             page.on('console', async msg => {
                 const text = msg.text();
-                
-                // Logs vindos do Observador do Painel (Interface)
                 if (text.startsWith('[EXT_PANEL_LOG]|')) {
                     socket.emit('log', text.split('|')[1]);
                 }
 
-                // Logs de Imagens e Blobs
                 if (text.includes('[IMAGES]')) {
                     const parts = text.split('|');
                     const index = parts[1];
@@ -196,7 +200,6 @@ io.on('connection', (socket) => {
                 }
             });
 
-            // Inicia a automação clicando no botão do painel
             await page.evaluate(() => {
                 const panel = document.getElementById('awu-panel');
                 const startBtn = [...panel.querySelectorAll('button')].find(b => 
@@ -211,7 +214,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('stop-automation', async () => {
-        socket.emit('log', '🛑 Parando navegadores...');
+        socket.emit('log', '🛑 Parando...');
         if (browser) {
             await browser.close();
             browser = null; page = null;
@@ -225,5 +228,5 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-    console.log(`🚀 SERVER PRO ATIVO: http://localhost:${PORT}`);
+    console.log(`🚀 SERVER PRO ATIVO NA PORTA ${PORT}`);
 });
