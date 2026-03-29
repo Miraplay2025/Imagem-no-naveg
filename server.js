@@ -56,9 +56,11 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            // 1. Limpeza e Extração
-            socket.emit('log', '📦 Extraindo extensão...');
+            // 1. Limpeza e Extração (GARANTINDO INSTALAÇÃO LIMPA)
+            socket.emit('log', '📦 Preparando ambiente e extraindo extensão...');
             if (fs.existsSync(EXTENSION_DIR)) fs.rmSync(EXTENSION_DIR, { recursive: true, force: true });
+            if (fs.existsSync(USER_DATA_DIR)) fs.rmSync(USER_DATA_DIR, { recursive: true, force: true }); // Limpa perfil anterior
+            
             fs.mkdirSync(EXTENSION_DIR, { recursive: true });
             
             const zipBuffer = Buffer.from(data.extensionZip, 'base64');
@@ -69,15 +71,14 @@ io.on('connection', (socket) => {
                 .pipe(unzipper.Extract({ path: EXTENSION_DIR }))
                 .promise();
 
-            // Verificar se o manifest está na raiz da pasta extraída
             const files = fs.readdirSync(EXTENSION_DIR);
-            socket.emit('log', `📂 Arquivos extraídos: ${files.join(', ')}`);
+            socket.emit('log', `📂 Extensão extraída com sucesso.`);
 
-            // 2. Lançamento do Navegador com Perfil Persistente
-            socket.emit('log', '🚀 Lançando navegador com extensão...');
+            // 2. Lançamento do Navegador
+            socket.emit('log', '🚀 Instalando extensão no navegador...');
             browser = await puppeteer.launch({
-                headless: 'new',
-                userDataDir: USER_DATA_DIR, // Ajuda a manter a extensão carregada
+                headless: false, // Alterado para false ou 'new' para garantir que extensões carreguem visualmente
+                userDataDir: USER_DATA_DIR,
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
@@ -93,36 +94,37 @@ io.on('connection', (socket) => {
             const pages = await browser.pages();
             page = pages.length > 0 ? pages[0] : await browser.newPage();
             
+            // PASSO CRUCIAL: Aguarda a extensão ser registrada pelo Chrome antes de navegar
+            socket.emit('log', '⏳ Aguardando registro da extensão (3s)...');
+            await new Promise(r => setTimeout(r, 3000));
+
             // 3. Cookies e Navegação
             const decodedCookies = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
             await page.setCookie(...JSON.parse(decodedCookies));
             
-            socket.emit('log', `🌐 Carregando página do Flow...`);
+            socket.emit('log', `🌐 Carregando página alvo...`);
             await page.goto(data.link, { waitUntil: 'networkidle2', timeout: 90000 });
 
-            // Aguarda a página e dá um tempo extra para scripts da extensão injetarem
-            await page.waitForFunction(() => document.body && document.body.innerText.length > 50);
-            socket.emit('log', '⏳ Aguardando injeção da extensão (5s)...');
+            // Tempo extra para injeção do content script
+            socket.emit('log', '⏳ Aguardando injeção final...');
             await new Promise(r => setTimeout(r, 5000));
 
             await sendScreenshot(socket, page, "VERIFICAÇÃO DE CARREGAMENTO");
 
-            // 4. Detecção e Injeção de Dados
-            socket.emit('log', '📝 Localizando painel...');
+            // 4. Detecção e Injeção de Dados (Lógica Original)
+            socket.emit('log', '📝 Localizando painel da extensão...');
             const result = await page.evaluate(async (prompts, assets) => {
                 const wait = (ms) => new Promise(r => setTimeout(r, ms));
                 
-                // Tenta abrir o painel clicando no botão de toggle da sua extensão
-                for(let i=0; i<5; i++) {
+                for(let i=0; i<10; i++) { // Aumentado o retry para 10 vezes
                     const btn = document.querySelector('div[style*="z-index: 10001"]') || 
                                 document.querySelector('div[style*="z-index: 30000"]');
                     
                     if (btn) btn.click();
-                    await wait(1500);
+                    await wait(2000);
 
                     const panel = document.getElementById('awu-panel');
                     if (panel) {
-                        // Preenche os prompts
                         const txt = panel.querySelector('textarea');
                         if (txt) {
                             txt.value = prompts.map(p => `Prompt\n${p}`).join('\n\n');
@@ -137,14 +139,14 @@ io.on('connection', (socket) => {
             }, data.prompts, data.assets);
 
             if (!result.success) {
-                throw new Error("Extensão instalada, mas o painel 'awu-panel' não apareceu.");
+                throw new Error("O painel 'awu-panel' não foi detectado após 10 tentativas.");
             }
 
-            socket.emit('log', '✅ Extensão pronta e carregada!');
-            await sendScreenshot(socket, page, "PAINEL LOCALIZADO");
+            socket.emit('log', '✅ Painel detectado e preenchido!');
+            await sendScreenshot(socket, page, "PAINEL PRONTO");
             
             socket.emit('automation-status', { 
-                msg: `Extensão detectada com sucesso. Iniciar?`, 
+                msg: `Extensão pronta. Confirmar início?`, 
                 showConfirm: true 
             });
 
