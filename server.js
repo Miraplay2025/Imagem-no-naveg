@@ -9,13 +9,14 @@ const unzipper = require('unzipper');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '100mb' })); // Aumentado para suportar tráfego de imagens Base64
+app.use(express.json({ limit: '100mb' }));
 
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] }
 });
 
+// Serve os arquivos da pasta public (onde deve estar seu index.html)
 app.use(express.static('public'));
 
 let browser = null;
@@ -24,7 +25,6 @@ const EXTENSION_DIR = path.join(__dirname, 'temp_extension');
 
 /**
  * FUNÇÃO PARA TIRAR PRINT E ENVIAR VIA SOCKET
- * Mantida 100% original conforme solicitado.
  */
 async function sendScreenshot(socket, page, title) {
     if (page) {
@@ -35,7 +35,7 @@ async function sendScreenshot(socket, page, title) {
                 title: title 
             });
         } catch (e) {
-            socket.emit('log', 'Erro ao capturar print: ' + e.message);
+            console.log('Erro screenshot:', e.message);
         }
     }
 }
@@ -48,10 +48,14 @@ async function reportError(socket, page, errorMsg) {
         await sendScreenshot(socket, page, "❌ ERRO DETECTADO");
     }
     socket.emit('log', `❌ LOG DE ERRO: ${errorMsg}`);
+    console.error(`[Erro]: ${errorMsg}`);
 }
 
 io.on('connection', (socket) => {
+    // REQUISITO: Notificar o HTML que a conexão foi estabelecida
     console.log('Cliente conectado ao Server Pro');
+    socket.emit('log', '✅ Conectado ao Servidor de Automação');
+    socket.emit('connection-success', { status: 'connected' });
 
     socket.on('start-automation', async (data) => {
         try {
@@ -60,21 +64,30 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            socket.emit('log', '📦 Processando extensão recebida...');
+            socket.emit('log', '📦 Processando extensão e preparando ambiente...');
 
-            // 1. Extração da Extensão
+            // 1. Extração Segura da Extensão
             try {
-                if (fs.existsSync(EXTENSION_DIR)) fs.rmSync(EXTENSION_DIR, { recursive: true });
-                fs.mkdirSync(EXTENSION_DIR);
+                if (fs.existsSync(EXTENSION_DIR)) {
+                    fs.rmSync(EXTENSION_DIR, { recursive: true, force: true });
+                }
+                fs.mkdirSync(EXTENSION_DIR, { recursive: true });
+                
                 const zipBuffer = Buffer.from(data.extensionZip, 'base64');
                 const zipPath = path.join(__dirname, 'extension.zip');
                 fs.writeFileSync(zipPath, zipBuffer);
-                await fs.createReadStream(zipPath).pipe(unzipper.Extract({ path: EXTENSION_DIR })).promise();
+
+                // Aguarda a extração terminar completamente
+                await fs.createReadStream(zipPath)
+                    .pipe(unzipper.Extract({ path: EXTENSION_DIR }))
+                    .promise();
+                
+                socket.emit('log', '✅ Extensão extraída com sucesso.');
             } catch (zipErr) {
-                throw new Error(`Falha ao extrair ZIP: ${zipErr.message}`);
+                throw new Error(`Falha crítica no ZIP: ${zipErr.message}`);
             }
 
-            socket.emit('log', '✅ Extensão pronta. Abrindo navegador...');
+            socket.emit('log', '🚀 Abrindo navegador Puppeteer...');
 
             // 2. Iniciar Puppeteer
             browser = await puppeteer.launch({
@@ -90,22 +103,26 @@ io.on('connection', (socket) => {
 
             const pages = await browser.pages();
             page = pages[0];
-            page.setDefaultTimeout(90000);
+            page.setDefaultTimeout(60000);
 
             // 3. Cookies
             try {
                 const decoded = Buffer.from(data.cookiesBase64, 'base64').toString('utf-8');
                 const cookies = JSON.parse(decoded);
                 await page.setCookie(...(Array.isArray(cookies) ? cookies : [cookies]));
-                socket.emit('log', '✅ Cookies aplicados.');
+                socket.emit('log', '✅ Sessão (Cookies) restaurada.');
             } catch (e) {
-                throw new Error(`Cookies Inválidos: ${e.message}`);
+                throw new Error(`Erro nos Cookies JSON: ${e.message}`);
             }
 
             // 4. Navegação
+            socket.emit('log', `🌐 Navegando para: ${data.link}`);
             await page.goto(data.link, { waitUntil: 'networkidle2' });
+            
             await sendScreenshot(socket, page, "Página Carregada - Confirme o Início");
             socket.emit('automation-status', { msg: "Pronto para iniciar!", showConfirm: true });
+            
+            // Salva os dados para o próximo passo (confirmação)
             page.automationData = data;
 
         } catch (err) {
@@ -118,14 +135,16 @@ io.on('connection', (socket) => {
         const data = page.automationData;
 
         try {
+            // Expõe a função para a extensão chamar o print do Node
             await page.exposeFunction('sendScreenshotToNode', (title) => sendScreenshot(socket, page, title));
 
-            // LÓGICA DE CAPTURA E CONVERSÃO DE BLOBS PARA BASE64
+            // Monitor de Console (Logs da Extensão)
             page.on('console', async msg => {
                 const text = msg.text();
                 
                 if (text.includes('[FLOW_LOG]')) {
-                    socket.emit('log', text.split('|')[2] || text);
+                    const logContent = text.split('|')[2] || text;
+                    socket.emit('log', logContent);
                 }
 
                 if (text.includes('[IMAGES]')) {
@@ -133,9 +152,9 @@ io.on('connection', (socket) => {
                     const index = parts[1];
                     const blobUrls = JSON.parse(parts[2]);
 
-                    socket.emit('log', `🖼️ Convertendo ${blobUrls.length} imagens para formato persistente...`);
+                    socket.emit('log', `🖼️ Capturando ${blobUrls.length} imagens geradas...`);
 
-                    // Converte cada Blob URL em Base64 dentro do contexto do navegador
+                    // Converte Blob URLs em Base64 para persistência no HTML
                     const base64Images = await page.evaluate(async (urls) => {
                         const convert = async (url) => {
                             const response = await fetch(url);
@@ -149,23 +168,24 @@ io.on('connection', (socket) => {
                         return Promise.all(urls.map(u => convert(u)));
                     }, blobUrls);
 
-                    // Envia os links em Base64 (persistentes) para o HTML
                     socket.emit('new-images', { index: index, urls: base64Images });
-                    socket.emit('log', `✅ Imagens do prompt ${index} enviadas com sucesso!`);
+                    socket.emit('log', `✅ Prompt #${index} finalizado e enviado.`);
                 }
             });
 
-            socket.emit('log', '🚀 Configurando painel da extensão...');
+            socket.emit('log', '⚙️ Injetando comandos no painel da extensão...');
 
-            // 5. Interação com o Painel
+            // 5. Automação do Painel Interno
             await page.evaluate(async (prompts, assets) => {
                 const wait = (ms) => new Promise(r => setTimeout(r, ms));
+                
+                // Abre o painel se estiver fechado (baseado no seletor do toggleBtn)
                 const toggleBtn = document.querySelector('div[style*="z-index: 10001"]');
                 if (toggleBtn) toggleBtn.click();
-                await wait(1000);
+                await wait(1500);
 
                 const panel = document.getElementById('awu-panel');
-                if (!panel) throw new Error("Painel não encontrado!");
+                if (!panel) return console.error("Painel da extensão não injetado!");
 
                 const textarea = panel.querySelector('textarea');
                 if (textarea) {
@@ -173,31 +193,42 @@ io.on('connection', (socket) => {
                     textarea.dispatchEvent(new Event('input', { bubbles: true }));
                 }
 
+                // Salva assets no localStorage para a extensão ler
                 localStorage.setItem("flow_persistent_assets_v3", JSON.stringify(assets));
 
-                const startBtn = [...panel.querySelectorAll('button')].find(b => b.innerText.includes('INICIAR'));
+                // Clica no botão de iniciar da EXTENSÃO
+                const startBtn = [...panel.querySelectorAll('button')].find(b => 
+                    b.innerText.includes('INICIAR') || b.innerText.includes('START')
+                );
+                
                 if (startBtn) {
                     startBtn.click();
-                    window.sendScreenshotToNode("Iniciando Geração via Painel");
+                    window.sendScreenshotToNode("Iniciando Fluxo de Geração");
                 }
             }, data.prompts, data.assets);
 
         } catch (err) {
-            await reportError(socket, page, `Erro na Automação: ${err.message}`);
+            await reportError(socket, page, `Falha na Injeção: ${err.message}`);
         }
     });
 
     socket.on('stop-automation', async () => {
-        if (page) {
-            await page.evaluate(() => {
-                const panel = document.getElementById('awu-panel');
-                const stopBtn = [...panel.querySelectorAll('button')].find(b => b.innerText.includes('PARAR'));
-                if (stopBtn) stopBtn.click();
-            });
-            socket.emit('log', '🛑 Automação interrompida.');
+        socket.emit('log', '🛑 Comando de parada recebido.');
+        if (browser) {
+            await browser.close();
+            browser = null;
+            page = null;
         }
+    });
+
+    socket.on('disconnect', () => {
+        console.log('Cliente desconectado.');
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Server Super Pro Ativo na porta ${PORT}`));
+server.listen(PORT, () => {
+    console.log(`\n========================================`);
+    console.log(`🚀 SERVER PRO ATIVO: http://localhost:${PORT}`);
+    console.log(`========================================\n`);
+});
