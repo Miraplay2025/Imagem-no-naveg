@@ -81,7 +81,7 @@ io.on('connection', (socket) => {
                             if (!page) throw new Error("Página perdida");
                             await page.bringToFront();
 
-                            // Mapeia o que já existe para não capturar imagens antigas
+                            // Mapeia IDs ou SRCS existentes
                             const existingImages = await page.evaluate(() => {
                                 return [...document.querySelectorAll('img[alt="Imagem gerada"]')].map(img => img.src);
                             });
@@ -119,58 +119,66 @@ io.on('connection', (socket) => {
 
                             if (sendResult.status === 'error') throw new Error(sendResult.msg);
 
-                            socket.emit('log', `⏳ Enviado. Aguardando aparecer o processamento...`);
+                            socket.emit('log', `⏳ Aguardando sinal de processamento...`);
 
-                            // 1. ESPERA O CARREGADOR APARECER (kAxcVK)
+                            // Espera o carregador (.kAxcVK) aparecer
                             try {
-                                await page.waitForSelector('.kAxcVK', { timeout: 20000 });
-                                socket.emit('log', `⚙️ Geração do prompt ${i+1} detectada (Iniciando...)`);
+                                await page.waitForSelector('.kAxcVK', { timeout: 25000 });
+                                socket.emit('log', `⚙️ Geração iniciada...`);
                             } catch (e) {
-                                socket.emit('log', `⚠️ Loader não visível, mas aguardando imagens...`);
+                                socket.emit('log', `⚠️ Loader não detectado visualmente, mas monitorando DOM...`);
                             }
-                            
-                            // PRINT DO ESTADO DE GERAÇÃO (Aquele que você viu com 3%)
-                            const genSnap = await page.screenshot({ encoding: 'base64' });
-                            socket.emit('screenshot-update', {
-                                img: `data:image/png;base64,${genSnap}`,
-                                title: `GERANDO IMAGENS: PROMPT ${i+1}`
-                            });
 
-                            // 2. ESPERA O CARREGADOR SUMIR (Fim da geração)
-                            await page.waitForFunction(() => !document.querySelector('.kAxcVK'), { timeout: 240000 });
+                            // Espera o carregador sumir
+                            await page.waitForFunction(() => !document.querySelector('.kAxcVK'), { timeout: 200000 });
                             
-                            socket.emit('log', "✅ Processamento visual sumiu. Aguardando 12s para renderização final...");
-                            await delay(12000); // Aumentado para garantir que a imagem carregue após o 99%
+                            socket.emit('log', "✅ Fim do processamento. Validando renderização das imagens...");
 
-                            // 3. CAPTURA DAS NOVAS IMAGENS COM FILTRO DE SEGURANÇA
-                            const newImages = await page.evaluate(async (oldImgs) => {
-                                const allImgs = [...document.querySelectorAll('img[alt="Imagem gerada"]')];
-                                // Filtra apenas as que não estavam lá antes e que tenham um SRC válido (não vazio ou data:vazio)
-                                const news = allImgs.filter(img => !oldImgs.includes(img.src) && img.src.length > 50);
+                            // --- NOVA LÓGICA DE VALIDAÇÃO DE RENDERIZAÇÃO ---
+                            let validImages = [];
+                            let checkAttempts = 0;
+                            
+                            while (checkAttempts < 10 && validImages.length === 0) {
+                                checkAttempts++;
+                                await delay(3000); // Espera 3s entre checagens (Total max 30s)
+
+                                const captured = await page.evaluate(async (oldImgs) => {
+                                    const allImgs = [...document.querySelectorAll('img[alt="Imagem gerada"]')];
+                                    // Filtra imagens novas que tenham um SRC real (HTTP/HTTPS) e não sejam placeholders pequenos
+                                    const news = allImgs.filter(img => 
+                                        !oldImgs.includes(img.src) && 
+                                        img.src.startsWith('http') && 
+                                        img.complete && 
+                                        img.naturalWidth > 10
+                                    );
+                                    
+                                    if (news.length === 0) return [];
+
+                                    return Promise.all(news.map(async (img) => {
+                                        try {
+                                            const resp = await fetch(img.src);
+                                            const blob = await resp.blob();
+                                            return new Promise(r => {
+                                                const reader = new FileReader();
+                                                reader.onloadend = () => r(reader.result);
+                                                reader.readAsDataURL(blob);
+                                            });
+                                        } catch (err) { return null; }
+                                    }));
+                                }, existingImages);
+
+                                validImages = captured.filter(img => img !== null);
+                                if (validImages.length > 0) break;
                                 
-                                if (news.length === 0) return [];
-
-                                return Promise.all(news.map(async (img) => {
-                                    try {
-                                        const resp = await fetch(img.src);
-                                        const blob = await resp.blob();
-                                        return new Promise(r => {
-                                            const reader = new FileReader();
-                                            reader.onloadend = () => r(reader.result);
-                                            reader.readAsDataURL(blob);
-                                        });
-                                    } catch (err) { return null; }
-                                }));
-                            }, existingImages);
-
-                            const validImages = newImages.filter(img => img !== null);
+                                socket.emit('log', `🔍 Tentativa de captura ${checkAttempts}/10...`);
+                            }
 
                             if (validImages.length > 0) {
                                 socket.emit('new-images', { index: i + 1, urls: validImages });
                                 socket.emit('log', `✨ Sucesso! ${validImages.length} imagens capturadas do prompt ${i+1}`);
                                 success = true;
                             } else {
-                                throw new Error(`Imagens não renderizadas a tempo no prompt ${i+1}`);
+                                throw new Error(`O Flow finalizou mas as imagens não carregaram no DOM.`);
                             }
 
                         } catch (err) {
@@ -188,25 +196,25 @@ io.on('connection', (socket) => {
                                 await page.reload({ waitUntil: 'networkidle2' }).catch(() => {});
                                 await delay(5000);
                             } else {
-                                socket.emit('log', `🚫 Falha definitiva no prompt ${i+1}. Pulando...`);
-                                success = true; // Força saída do loop de tentativas para não travar a lista
+                                socket.emit('log', `🚫 Falha definitiva no prompt ${i+1}. Pulando.`);
+                                success = true; 
                             }
                         }
                     }
                 }
-                socket.emit('log', "🏁 Automação de toda a lista finalizada!");
+                socket.emit('log', "🏁 Automação finalizada!");
             });
 
         } catch (error) {
             console.error(error);
-            socket.emit('log', "❌ ERRO CRÍTICO NO SISTEMA: " + error.message, "error");
+            socket.emit('log', "❌ ERRO CRÍTICO: " + error.message, "error");
             if (browser) await browser.close().catch(() => {});
         }
     });
 
     socket.on('stop-automation', async () => {
         if (browser) await browser.close().catch(() => {});
-        socket.emit('log', "🛑 Automação parada manualmente.");
+        socket.emit('log', "🛑 Operação parada.");
     });
 
     socket.on('disconnect', async () => {
