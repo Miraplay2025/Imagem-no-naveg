@@ -56,6 +56,12 @@
 
         .pending { border: 1px dashed #ef4444 !important; }
         .loaded { border: 1px solid #10b981 !important; background: rgba(16, 185, 129, 0.05) !important; }
+        
+        /* Efeito de brilho para novas imagens */
+        .new-result-card {
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            transition: all 0.5s ease;
+        }
     </style>
 </head>
 <body class="p-4 flex flex-col items-center pb-20">
@@ -143,7 +149,7 @@
             reader.readAsText(file);
         };
 
-        // Carregar Assets
+        // Carregar Assets (Imagens de Referência)
         document.getElementById('assets-file').onchange = async (e) => {
             const files = Array.from(e.target.files);
             for (const file of files) {
@@ -187,7 +193,7 @@
             renderAssets();
         };
 
-        // Detectar Prompts
+        // Processamento de Prompts
         document.getElementById('prompt-input').oninput = (e) => {
             const val = e.target.value.trim();
             if (val.toLowerCase().includes("prompt")) {
@@ -199,7 +205,7 @@
             document.getElementById('prompt-stats').textContent = `${state.prompts.length} Prompts Detectados`;
         };
 
-        // Iniciar Automação
+        // Controle de Botões (Start)
         document.getElementById('btn-start').onclick = () => {
             const url = document.getElementById('flow-url').value;
             if (!url || !cookiesBase64 || state.prompts.length === 0) {
@@ -216,36 +222,62 @@
             document.getElementById('btn-stop').classList.remove('hidden');
         };
 
-        // Receber Screenshot do Puppeteer
+        // Controle de Botões (Confirmação)
+        document.getElementById('btn-confirm').onclick = () => {
+            socket.emit('confirm-start');
+            document.getElementById('confirm-box').classList.add('hidden');
+            addLog("🚀 Injeção confirmada. Iniciando fluxo...", "success");
+        };
+
+        // Controle de Botões (Stop) - Sem Recarregar Página
+        document.getElementById('btn-stop').onclick = () => { 
+            socket.emit('stop-automation'); 
+            document.getElementById('btn-stop').classList.add('hidden');
+            document.getElementById('btn-start').classList.remove('hidden');
+            document.getElementById('confirm-box').classList.add('hidden');
+            document.getElementById('robot-view').classList.add('hidden');
+            addLog("🛑 Navegador fechado. Interface mantida.", "warning");
+        };
+
+        // --- HANDLERS DO SOCKET ---
+
         socket.on('screenshot-update', (data) => {
             document.getElementById('robot-view').classList.remove('hidden');
             document.getElementById('screen-img').src = data.img;
             document.getElementById('view-title').textContent = data.title;
-            document.getElementById('robot-view').scrollIntoView({ behavior: 'smooth' });
         });
 
-        // Mostrar Botão de Confirmação
         socket.on('automation-status', (data) => {
             if (data.showConfirm) {
                 document.getElementById('confirm-box').classList.remove('hidden');
-                addLog("👀 Verifique o print! Se estiver na tela correta, confirme.", "warning");
+                addLog("👀 Verifique a visualização ao vivo antes de confirmar.", "warning");
             }
         });
 
-        // Evento de Confirmação
-        document.getElementById('btn-confirm').onclick = () => {
-            socket.emit('confirm-start');
-            document.getElementById('confirm-box').classList.add('hidden');
-            addLog("🚀 Injeção confirmada. Iniciando geração...", "success");
-        };
-
-        // Receber Logs do Servidor
         socket.on('log', (msg) => {
             let type = "info";
             if (msg.includes("❌") || msg.toLowerCase().includes("erro")) type = "error";
-            if (msg.includes("✅") || msg.includes("Sucesso") || msg.toLowerCase().includes("finalizada")) type = "success";
-            if (msg.includes("⚠️") || msg.toLowerCase().includes("aguardando")) type = "warning";
+            if (msg.includes("✅") || msg.toLowerCase().includes("sucesso") || msg.toLowerCase().includes("finalizada")) type = "success";
+            if (msg.includes("⚠️") || msg.toLowerCase().includes("aguardando") || msg.toLowerCase().includes("tentativa")) type = "warning";
             addLog(msg, type);
+        });
+
+        socket.on('new-images', (data) => {
+            const container = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = "bg-slate-900/90 p-4 rounded-2xl border border-slate-800 space-y-3 animate-bounce new-result-card";
+            
+            div.innerHTML = `
+                <div class="flex justify-between items-center text-[10px] px-1">
+                    <span class="text-blue-400 font-bold uppercase">PROMPT #${data.index} COMPLETO</span>
+                    <span class="text-slate-500 font-mono text-[8px] italic">Extraído do Flow</span>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    ${data.urls.map(u => `<img src="${u}" class="rounded-xl border border-slate-700 shadow-md hover:scale-105 transition-transform duration-300">`).join('')}
+                </div>
+            `;
+            container.prepend(div);
+            setTimeout(() => div.classList.remove('animate-bounce'), 1200);
         });
 
         function addLog(msg, type) {
@@ -257,33 +289,6 @@
             logBox.appendChild(entry);
             logBox.scrollTop = logBox.scrollHeight;
         }
-
-        // Exibir Imagens Geradas em Tempo Real
-        socket.on('new-images', (data) => {
-            const div = document.createElement('div');
-            div.className = "bg-slate-900/80 p-3 rounded-2xl border border-slate-800 space-y-2 animate-bounce";
-            div.innerHTML = `
-                <div class="flex justify-between items-center text-[10px] px-1">
-                    <span class="text-blue-400 font-bold uppercase">Prompt #${data.index}</span>
-                    <span class="text-slate-500 font-mono text-[8px] italic">Capturado do Browser</span>
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                    ${data.urls.map(u => `<img src="${u}" class="rounded-xl border border-slate-700 shadow-lg hover:scale-105 transition-transform">`).join('')}
-                </div>
-            `;
-            document.getElementById('results').prepend(div);
-            setTimeout(() => div.classList.remove('animate-bounce'), 1000);
-        });
-
-        // Parar Automação
-        document.getElementById('btn-stop').onclick = () => { 
-            socket.emit('stop-automation'); 
-            document.getElementById('btn-stop').classList.add('hidden');
-            document.getElementById('btn-start').classList.remove('hidden');
-            document.getElementById('confirm-box').classList.add('hidden');
-            document.getElementById('robot-view').classList.add('hidden');
-            addLog("🛑 Parando navegador e resetando sessão...", "warning");
-        };
     </script>
 </body>
 </html>
