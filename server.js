@@ -13,7 +13,7 @@ app.use(express.static('public'));
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 io.on('connection', (socket) => {
-    console.log('Cliente conectado:', socket.id);
+    console.log('Cliente conectado');
     let browser = null;
     let page = null;
 
@@ -23,6 +23,9 @@ io.on('connection', (socket) => {
         try {
             socket.emit('log', "🚀 Iniciando Puppeteer no Render...");
 
+            // Se já houver um browser aberto para esta conexão, fecha antes de iniciar
+            if (browser) await browser.close().catch(() => {});
+
             browser = await puppeteer.launch({
                 headless: "new",
                 args: [
@@ -30,14 +33,18 @@ io.on('connection', (socket) => {
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
-                    '--no-first-run',
-                    '--no-zygote',
-                    '--single-process'
+                    '--disable-web-security',
+                    '--window-size=1280,800'
                 ]
             });
 
             page = await browser.newPage();
             await page.setViewport({ width: 1280, height: 800 });
+
+            // Tratamento de erros de desconexão de frame/navegação
+            page.on('error', err => {
+                socket.emit('log', `❌ Erro na página: ${err.message}`, "error");
+            });
 
             socket.emit('log', "🔑 Aplicando cookies de autenticação...");
             const cookiesRaw = Buffer.from(cookiesBase64, 'base64').toString('utf-8');
@@ -45,7 +52,16 @@ io.on('connection', (socket) => {
             await page.setCookie(...cookies);
 
             socket.emit('log', `🌐 Acessando: ${link}`);
-            await page.goto(link, { waitUntil: 'networkidle2', timeout: 90000 });
+            
+            // Try-catch específico para a navegação inicial
+            try {
+                await page.goto(link, { 
+                    waitUntil: 'networkidle2', 
+                    timeout: 70000 
+                });
+            } catch (navError) {
+                socket.emit('log', "⚠️ Aviso: A página demorou a carregar 100%, tentando prosseguir mesmo assim...");
+            }
 
             await delay(5000);
 
@@ -56,11 +72,10 @@ io.on('connection', (socket) => {
             });
             
             socket.emit('automation-status', { showConfirm: true });
-            socket.emit('log', "⚠️ Aguardando sua confirmação no painel para injetar os prompts...");
+            socket.emit('log', "👀 Aguardando confirmação visual do usuário...");
 
-            // Aguarda o clique no botão "Confirmar" do HTML
             socket.once('confirm-start', async () => {
-                socket.emit('log', "✅ Confirmação recebida! Iniciando ciclo de prompts...");
+                socket.emit('log', "✅ Confirmação recebida! Iniciando automação...");
                 
                 for (let i = 0; i < prompts.length; i++) {
                     const currentPrompt = prompts[i];
@@ -69,18 +84,18 @@ io.on('connection', (socket) => {
 
                     while (attempts < 3 && !success) {
                         attempts++;
-                        socket.emit('log', `📝 Processando Prompt ${i + 1}/${prompts.length} (Tentativa ${attempts})`);
+                        socket.emit('log', `📝 Processando Prompt ${i + 1} (Tentativa ${attempts})`);
 
                         try {
-                            // 1. Mapear imagens existentes para ignorar depois
+                            // Salvar imagens atuais antes de enviar
                             const existingImages = await page.evaluate(() => {
                                 return [...document.querySelectorAll('img[alt="Imagem gerada"]')].map(img => img.src);
                             });
 
-                            // 2. Injetar o Prompt via simulação de colagem (DataTransfer)
-                            const injectionResult = await page.evaluate((text) => {
+                            // Injeção de Prompt (Simulação de Colagem)
+                            await page.evaluate((text) => {
                                 const inputEl = document.querySelector('div[role="textbox"]') || document.querySelector('textarea');
-                                if (!inputEl) return false;
+                                if (!inputEl) throw new Error("Campo de texto não encontrado");
 
                                 inputEl.focus();
                                 document.execCommand('selectAll', false, null);
@@ -88,124 +103,94 @@ io.on('connection', (socket) => {
 
                                 const dt = new DataTransfer();
                                 dt.setData('text/plain', text);
-                                
                                 const pasteEvent = new ClipboardEvent('paste', {
-                                    clipboardData: dt,
-                                    bubbles: true,
-                                    cancelable: true
+                                    clipboardData: dt, bubbles: true, cancelable: true
                                 });
                                 inputEl.dispatchEvent(pasteEvent);
-
-                                // Disparar eventos de input para o React/Angular detectar mudança
                                 inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-                                return true;
                             }, currentPrompt);
-
-                            if (!injectionResult) {
-                                throw new Error("Campo de texto não encontrado na página.");
-                            }
 
                             await delay(800);
 
-                            // 3. Clicar no botão de envio (arrow_forward)
-                            const clickResult = await page.evaluate(() => {
+                            // Clique no botão enviar
+                            const clicked = await page.evaluate(() => {
                                 const btn = [...document.querySelectorAll("button, i, span")].find(e => 
-                                    e.innerText?.includes("arrow_forward") || 
-                                    e.textContent?.includes("arrow_forward")
+                                    e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward")
                                 );
-                                if (btn) {
-                                    btn.click();
-                                    return true;
-                                }
+                                if (btn) { btn.click(); return true; }
                                 return false;
                             });
 
-                            if (!clickResult) {
-                                throw new Error("Botão de envio não encontrado.");
-                            }
+                            if (!clicked) throw new Error("Botão de envio não encontrado");
 
-                            socket.emit('log', `⏳ Aguardando início da geração...`);
-
-                            // 4. Detectar classe de carregamento (ex: "kAxcVK")
+                            // Monitorar carregamento
                             try {
                                 await page.waitForSelector('.kAxcVK', { timeout: 15000 });
-                                socket.emit('log', `📸 Geração iniciada! Capturando status...`);
-                                const loadingSnap = await page.screenshot({ encoding: 'base64' });
                                 socket.emit('log', `carregamento de imagem de prompt ${i+1} iniciado`);
+                                const loadingSnap = await page.screenshot({ encoding: 'base64' });
+                                socket.emit('screenshot-update', { img: `data:image/png;base64,${loadingSnap}`, title: "GERANDO..." });
                             } catch (e) {
-                                socket.emit('log', "⚠️ Classe de carregamento não vista, verificando imagens diretamente...");
+                                socket.emit('log', "⏳ Aguardando processamento...");
                             }
 
-                            // 5. Aguardar o processamento sumir
-                            socket.emit('log', "⚙️ Processando... aguardando finalização.");
+                            // Esperar finalização
                             await page.waitForFunction(() => !document.querySelector('.kAxcVK'), { timeout: 120000 });
-                            
-                            socket.emit('log', "🔍 Processamento finalizado. Buscando novas imagens...");
-                            await delay(5000); // Delay de segurança para as imagens renderizarem
+                            socket.emit('log', "processamento sumir, aguardado alguns segundos...");
+                            await delay(6000);
 
-                            // 6. Capturar apenas as novas imagens
-                            const newImagesBase64 = await page.evaluate((oldImgs) => {
-                                const currentImgs = [...document.querySelectorAll('img[alt="Imagem gerada"]')];
-                                // Filtra imagens que não estavam na lista inicial
-                                const news = currentImgs.filter(img => !oldImgs.includes(img.src));
-                                
-                                // Função auxiliar para converter img para base64 dentro do browser
+                            // Capturar novas imagens
+                            const newImages = await page.evaluate((oldImgs) => {
+                                const news = [...document.querySelectorAll('img[alt="Imagem gerada"]')].filter(img => !oldImgs.includes(img.src));
                                 return Promise.all(news.map(async (img) => {
-                                    try {
-                                        const response = await fetch(img.src);
-                                        const blob = await response.blob();
-                                        return new Promise((resolve) => {
-                                            const reader = new FileReader();
-                                            reader.onloadend = () => resolve(reader.result);
-                                            reader.readAsDataURL(blob);
-                                        });
-                                    } catch (err) { return null; }
+                                    const resp = await fetch(img.src);
+                                    const blob = await resp.blob();
+                                    return new Promise(r => {
+                                        const reader = new FileReader();
+                                        reader.onloadend = () => r(reader.result);
+                                        reader.readAsDataURL(blob);
+                                    });
                                 }));
                             }, existingImages);
 
-                            const validImages = newImagesBase64.filter(img => img !== null);
-
-                            if (validImages.length > 0) {
-                                socket.emit('new-images', {
-                                    index: i + 1,
-                                    urls: validImages
-                                });
-                                socket.emit('log', `✅ Sucesso! ${validImages.length} imagens capturadas do prompt ${i+1}`);
+                            if (newImages.length > 0) {
+                                socket.emit('new-images', { index: i + 1, urls: newImages });
+                                socket.emit('log', `✅ sucesso ${newImages.length} de imagens capturadas de prompt ${i+1}`);
                                 success = true;
                             } else {
-                                throw new Error(`Nenhuma imagem nova encontrada no prompt ${i+1}`);
+                                throw new Error(`nenhuma imagem encontrada no prompt ${i+1}`);
                             }
 
                         } catch (err) {
-                            socket.emit('log', `❌ Erro: ${err.message}`, "error");
+                            socket.emit('log', `❌ Erro no prompt ${i+1}: ${err.message}`);
                             if (attempts < 3) {
-                                socket.emit('log', `🔄 Reinviando prompt ${i+1}...`);
-                                await page.reload({ waitUntil: 'networkidle2' });
-                                await delay(3000);
+                                socket.emit('log', `reiviado o prompt ${i+1}...`);
+                                await page.reload({ waitUntil: 'networkidle2' }).catch(() => {});
+                                await delay(4000);
                             } else {
-                                socket.emit('log', `🚫 Erro definitivo no prompt ${i+1}. Prosseguindo para o próximo...`);
+                                socket.emit('log', `🚫 erro definitive ao gerar imagens de prompt ${i+1} proseguindo pra o proximo prompt ${i+2}`);
                             }
                         }
                     }
                 }
-                socket.emit('log', "🏁 Automação finalizada com sucesso!");
+                socket.emit('log', "🏁 Automação finalizada!");
             });
 
         } catch (error) {
             console.error(error);
             socket.emit('log', "❌ ERRO CRÍTICO: " + error.message, "error");
+            if (browser) await browser.close().catch(() => {});
         }
     });
 
     socket.on('stop-automation', async () => {
-        if (browser) await browser.close();
-        socket.emit('log', "🛑 Robô desligado pelo usuário.");
+        if (browser) await browser.close().catch(() => {});
+        socket.emit('log', "🛑 Operação parada.");
     });
 
     socket.on('disconnect', async () => {
-        if (browser) await browser.close();
+        if (browser) await browser.close().catch(() => {});
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server rodando na porta ${PORT}`));
+server.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
