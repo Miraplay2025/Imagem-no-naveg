@@ -16,22 +16,19 @@ let page = null;
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 io.on('connection', (socket) => {
-    console.log('Cliente conectado');
+    console.log('Cliente conectado:', socket.id);
 
     socket.on('start-automation', async (data) => {
         const { link, prompts, cookiesBase64, assets } = data;
 
         try {
-            socket.emit('log', "🚀 Iniciando Puppeteer no Render...");
-
+            socket.emit('log', "🚀 Iniciando Puppeteer (Ambiente Render)...");
+            
             browser = await puppeteer.launch({
                 headless: "new",
                 args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--disable-web-security',
+                    '--no-sandbox', '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage', '--disable-gpu',
                     '--window-size=1280,800'
                 ]
             });
@@ -39,230 +36,197 @@ io.on('connection', (socket) => {
             page = await browser.newPage();
             await page.setViewport({ width: 1280, height: 800 });
 
-            socket.emit('log', "🔑 Aplicando cookies de autenticação...");
+            // 1. Aplicação de Cookies
+            socket.emit('log', "🔑 Aplicando cookies de sessão...");
             const cookiesRaw = Buffer.from(cookiesBase64, 'base64').toString('utf-8');
             const cookies = JSON.parse(cookiesRaw);
             await page.setCookie(...cookies);
 
-            socket.emit('log', `🌐 Acessando: ${link}`);
+            // 2. Navegação Inicial
+            socket.emit('log', `🌐 Navegando para o Flow...`);
             await page.goto(link, { waitUntil: 'networkidle2', timeout: 60000 });
-
             await delay(5000);
 
-            const screenshot = await page.screenshot({ encoding: 'base64' });
+            // 3. Verificação de Login com Print
+            const initialShot = await page.screenshot({ encoding: 'base64' });
             socket.emit('screenshot-update', { 
-                img: `data:image/png;base64,${screenshot}`, 
-                title: "VERIFICAÇÃO DE LOGIN" 
+                img: `data:image/png;base64,${initialShot}`, 
+                title: "STATUS: AGUARDANDO CONFIRMAÇÃO" 
             });
             socket.emit('automation-status', { showConfirm: true });
-            socket.emit('log', "👀 Aguardando confirmação visual do usuário...");
+            socket.emit('log', "👀 Verifique a tela. Se estiver logado, clique em INJETAR.");
 
+            // 4. Início da Automação após confirmação
             socket.once('confirm-start', async () => {
-                socket.emit('log', "✅ Confirmação recebida! Injetando lógica original...");
+                socket.emit('log', "🛡️ Ativando Bloqueador de Teclado e Iniciando...");
 
-                await page.evaluate((promptsList) => {
-                    // --- ESTADO INALTERADO ---
-                    window.state = {
-                        prompts: promptsList,
-                        currentIndex: 0,
-                        isRunning: false,
-                        stopRequested: false,
-                        capturedBlobs: [],
-                        initialUrls: new Set()
-                    };
+                for (let i = 0; i < prompts.length; i++) {
+                    const currentPrompt = prompts[i];
+                    let success = false;
+                    let attempts = 0;
 
-                    window.wait = (ms) => new Promise(r => setTimeout(r, ms));
-                    window.log = (msg, type) => { console.log(`AUTO_LOG:${type}:${msg}`); };
+                    socket.emit('log', `--- 📝 Processando Prompt ${i + 1}/${prompts.length} ---`);
 
-                    window.KeyboardBlocker = {
-                        startBlocking: () => {
-                            const style = document.createElement('style');
-                            style.id = 'awu-block-style';
-                            style.innerHTML = `input, textarea, [contenteditable="true"] { pointer-events: none !important; }`;
-                            document.head.appendChild(style);
-                        },
-                        stopBlocking: () => {
-                            const s = document.getElementById('awu-block-style');
-                            if(s) s.remove();
-                        }
-                    };
+                    while (attempts < 3 && !success) {
+                        attempts++;
+                        if (attempts > 1) socket.emit('log', `🔄 Tentativa ${attempts} para o prompt ${i+1}...`);
 
-                    window.PersistentManager = {
-                        injectAssets: async (promptText, logCallback) => {
-                            const assets = JSON.parse(localStorage.getItem("flow_persistent_assets_v3") || "[]");
-                            const foundAssets = assets.filter(item => new RegExp(`\\b${item.nameNoExt}\\b`, 'gi').test(promptText));
-                            if (foundAssets.length === 0) return;
-                            for (let item of foundAssets) {
-                                try {
-                                    let searchInput = document.querySelector('input[placeholder="Pesquisar recursos"]');
-                                    const addBtn = document.querySelector('button[class*="sc-addd5871-0"]') || [...document.querySelectorAll("button")].find(b => b.innerHTML.includes("add_2"));
-                                    if (!searchInput && addBtn) { addBtn.click(); await window.wait(800); searchInput = document.querySelector('input[placeholder="Pesquisar recursos"]'); }
-                                    if (searchInput) {
-                                        searchInput.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null);
-                                        const dt = new DataTransfer(); dt.setData('text/plain', item.nameNoExt);
-                                        searchInput.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
-                                        searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-                                        await window.wait(1000);
-                                        const target = [...document.querySelectorAll('.sc-3038c00b-16, .sc-dbfb6b4a-16')].find(el => el.textContent.toLowerCase().includes(item.nameNoExt.toLowerCase()));
-                                        if (target) { target.click(); await window.wait(1000); }
-                                    }
-                                } catch (e) {}
-                            }
-                        }
-                    };
+                        // Captura de tela antes de começar o prompt
+                        const startShot = await page.screenshot({ encoding: 'base64' });
+                        socket.emit('screenshot-update', { 
+                            img: `data:image/png;base64,${startShot}`, 
+                            title: `EXECUTANDO PROMPT #${i+1}` 
+                        });
 
-                    // --- INCORPORAÇÃO EXATA DA LÓGICA COM CLASSES ATUALIZADAS ---
-                    window.processPrompts = async function() {
-                        window.log("Iniciando processo de automação...", "success"); 
-                        window.state.isRunning = true; 
-                        window.state.stopRequested = false;
-                        window.KeyboardBlocker.startBlocking();
-
-                        const getUIStatus = () => {
-                            // CLASSES ATUALIZADAS CONFORME FORNECIDO
-                            const processing = !!document.querySelector(".kAxcVK"); // Classe de carregamento (99%)
-                            const hasError = !!document.querySelector(".cstgBg"); // Classe de erro (Ops!)
-                            const imgs = Array.from(document.querySelectorAll('img.sc-5923b123-1')).map(img => img.src); // Classe das imagens geradas
+                        // EXECUÇÃO NO BROWSER
+                        const executionResult = await page.evaluate(async (pText, pAssets) => {
+                            const wait = (ms) => new Promise(r => setTimeout(r, ms));
+                            const logs = [];
                             
-                            return { processing, imgs, hasError };
-                        };
+                            // A. Bloquear Teclado
+                            const inputs = document.querySelectorAll('input, textarea, [contenteditable="true"]');
+                            inputs.forEach(el => {
+                                el.style.pointerEvents = 'none';
+                                el.readOnly = true;
+                                el.setAttribute('inputmode', 'none');
+                                if (el.getAttribute('contenteditable')) el.setAttribute('contenteditable', 'false');
+                            });
 
-                        for (let i = window.state.currentIndex; i < window.state.prompts.length; i++) {
-                            if (window.state.stopRequested) break;
-                            
-                            const currentPrompt = window.state.prompts[i]; 
-                            console.log(`PROMPT_INDEX_UPDATE:${i + 1}`);
-                            
-                            let promptResolved = false; 
-                            let attempts = 0; 
-                            const MAX_ATTEMPTS = 3;
+                            // B. Mapear imagens existentes
+                            const getImages = () => Array.from(document.querySelectorAll('img[src*="media.getMediaUrlRedirect"]')).map(img => img.src);
+                            const imagensAntes = getImages();
 
-                            while (!promptResolved && !window.state.stopRequested && attempts < MAX_ATTEMPTS) {
-                                attempts++;
+                            // C. Injeção de Assets
+                            const nameNoExt = (name) => name.replace(/\.[^/.]+$/, "");
+                            const foundAssets = pAssets.filter(item => 
+                                new RegExp(`\\b${nameNoExt(item.name)}\\b`, 'gi').test(pText)
+                            );
+
+                            for (const asset of foundAssets) {
+                                const assetName = nameNoExt(asset.name);
+                                logs.push(`🔍 Buscando asset: "${assetName}"`);
                                 
-                                window.state.initialUrls = new Set(getUIStatus().imgs);
-                                await window.PersistentManager.injectAssets(currentPrompt, window.log);
-                                
-                                const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
-                                const btn = [...document.querySelectorAll("button, i")].find(e => e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward"));
-                                
-                                if (!inputEl || !btn) { 
-                                    window.log("Elementos de interface não encontrados. Aguardando...", "warning");
-                                    await window.wait(2000); 
-                                    continue; 
+                                const btnAdd = document.querySelector('.sc-addd5871-0') || [...document.querySelectorAll('button')].find(b => b.innerText.includes('add') || b.textContent.includes('add'));
+                                if (btnAdd) {
+                                    btnAdd.click();
+                                    await wait(800);
                                 }
                                 
-                                inputEl.focus(); 
-                                document.execCommand('selectAll', false, null); 
+                                const searchInput = document.querySelector('input[placeholder*="Pesquisar"]');
+                                if (searchInput) {
+                                    searchInput.focus();
+                                    document.execCommand('insertText', false, assetName);
+                                    await wait(1200);
+                                    
+                                    const items = document.querySelectorAll('.sc-3038c00b-16, .sc-dbfb6b4a-16');
+                                    const target = [...items].find(el => el.textContent.toLowerCase().includes(assetName.toLowerCase()));
+                                    
+                                    if (target) {
+                                        target.click();
+                                        logs.push(`✅ Imagem de referência "${assetName}" incluída.`);
+                                    } else {
+                                        logs.push(`❌ Erro: Imagem "${assetName}" não encontrada na lista.`);
+                                    }
+                                }
+                                await wait(500);
+                            }
+
+                            // D. Inserir Texto do Prompt
+                            const box = document.querySelector('div[role="textbox"]') || document.querySelector('textarea');
+                            if (box) {
+                                box.focus();
+                                document.execCommand('selectAll', false, null);
                                 document.execCommand('delete', false, null);
-                                await window.wait(300); 
                                 
-                                const dt = new DataTransfer(); 
-                                dt.setData('text/plain', currentPrompt);
-                                inputEl.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
-                                inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-                                
-                                window.log(`Enviando prompt [${i+1}] (Tentativa ${attempts})...`, "info"); 
-                                await window.wait(500); 
-                                btn.click();
-                                console.log("ACTION:SCREENSHOT_PROMPT");
+                                const dt = new DataTransfer();
+                                dt.setData('text/plain', pText);
+                                box.dispatchEvent(new ClipboardEvent('paste', {
+                                    clipboardData: dt, bubbles: true, cancelable: true
+                                }));
+                                await wait(600);
 
-                                // Aguarda até 15s para o loading aparecer
-                                let startedProcessing = false;
-                                for (let att = 0; att < 15; att++) { 
-                                    if (getUIStatus().processing) { startedProcessing = true; break; } 
-                                    await window.wait(1000); 
-                                }
-                                
-                                let waitTimer = 0;
-                                const MAX_WAIT = 120;
-                                
-                                while (!window.state.stopRequested && waitTimer < MAX_WAIT) {
-                                    const status = getUIStatus(); 
-
-                                    // Verifica se houve erro fatal durante a geração
-                                    if (status.hasError) {
-                                        window.log(`Erro detectado no Flow ("Ops! Algo deu errado"). Reiniciando tentativa...`, "error");
-                                        break; 
-                                    }
-
-                                    if (status.processing) { 
-                                        await window.wait(2000); 
-                                        waitTimer += 2; 
-                                        continue; 
-                                    }
-                                    
-                                    await window.wait(4000); 
-                                    const finalStatus = getUIStatus();
-                                    
-                                    const newImages = finalStatus.imgs.filter(url => !window.state.initialUrls.has(url) && !window.state.capturedBlobs.some(b => b.url === url));
-                                    
-                                    if (newImages.length >= 2) {
-                                        window.log(`Sucesso: [${newImages.length}] imagens no prompt [${i+1}]`, "success");
-                                        console.log(`IMAGES_CAPTURED:${i+1}:${JSON.stringify(newImages)}`);
-                                        promptResolved = true; 
-                                        window.state.currentIndex = i + 1; 
-                                        break;
-                                    } else if (newImages.length === 1) {
-                                        window.log(`Apenas 1 imagem detectada. Reiniciando prompt [${i+1}]...`, "warning");
-                                        await window.wait(3000);
-                                        break; 
-                                    } else { 
-                                        if (attempts < MAX_ATTEMPTS) {
-                                            window.log(`Aguardando renderização final do prompt [${i+1}]...`, "warning");
-                                            await window.wait(5000);
-                                            const recheck = getUIStatus();
-                                            const reImages = recheck.imgs.filter(url => !window.state.initialUrls.has(url) && !window.state.capturedBlobs.some(b => b.url === url));
-                                            if(reImages.length >= 2) continue;
-                                            window.log(`Nenhuma imagem detectada após carregamento (T${attempts}). Reiniciando...`, "reinject"); 
-                                        } else {
-                                            window.log(`Falha definitiva no prompt [${i+1}] após ${MAX_ATTEMPTS} tentativas.`, "error");
-                                            window.state.currentIndex = i + 1;
-                                            promptResolved = true;
-                                        }
-                                        break; 
-                                    }
+                                const btnSend = [...document.querySelectorAll("button, i")].find(e => 
+                                    e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward")
+                                );
+                                if (btnSend) {
+                                    btnSend.click();
+                                    logs.push(`🚀 Prompt enviado para o Flow.`);
                                 }
                             }
-                        }
-                        if (!window.state.stopRequested && window.state.currentIndex >= window.state.prompts.length) { 
-                            window.log("Automação finalizada!", "success"); 
-                        }
-                        window.KeyboardBlocker.stopBlocking();
-                        window.state.isRunning = false;
-                    };
 
-                    window.processPrompts();
-                }, prompts);
+                            return { imagensAntes, logs };
+                        }, currentPrompt, assets);
 
-                page.on('console', async (msg) => {
-                    const text = msg.text();
-                    if (text.startsWith('AUTO_LOG:')) {
-                        socket.emit('log', text.split(':').slice(2).join(':'));
+                        // Repassar logs da página para o HTML
+                        executionResult.logs.forEach(msg => socket.emit('log', msg));
+
+                        // E. Monitoramento da Geração (Classe 99%)
+                        let generating = true;
+                        let timer = 0;
+                        socket.emit('log', "🎨 Gerando imagens... Monitorando progresso.");
+
+                        while (generating && timer < 60) { // Timeout de 120 seg (60*2)
+                            await delay(2000);
+                            timer++;
+                            
+                            const isLoading = await page.evaluate(() => !!document.querySelector('.sc-55ebc859-7'));
+                            if (!isLoading) {
+                                await delay(6000); // Espera render final
+                                generating = false;
+                            }
+                            
+                            // Atualiza print durante geração
+                            if (timer % 5 === 0) {
+                                const midShot = await page.screenshot({ encoding: 'base64' });
+                                socket.emit('screenshot-update', { 
+                                    img: `data:image/png;base64,${midShot}`, 
+                                    title: `GERANDO PROMPT #${i+1} (${Math.min(timer*3, 99)}%)` 
+                                });
+                            }
+                        }
+
+                        // F. Captura e Comparação Final
+                        const finalCheck = await page.evaluate((antes) => {
+                            const atuais = Array.from(document.querySelectorAll('img[src*="media.getMediaUrlRedirect"]'))
+                                          .map(img => img.src);
+                            const novas = atuais.filter(src => !antes.includes(src));
+                            return { novas, count: novas.length };
+                        }, executionResult.imagensAntes);
+
+                        if (finalCheck.count >= 2) {
+                            socket.emit('log', `✅ Sucesso: ${finalCheck.count} imagens encontradas.`);
+                            socket.emit('new-images', { index: i + 1, urls: finalCheck.novas });
+                            success = true;
+                        } else if (finalCheck.count === 1) {
+                            socket.emit('log', `⚠️ Erro: Apenas 1 imagem gerada. Reenviando prompt...`);
+                        } else {
+                            socket.emit('log', `❌ Erro: Nenhuma imagem nova detectada. Reenviando prompt...`);
+                        }
                     }
-                    if (text === 'ACTION:SCREENSHOT_PROMPT') {
-                        await delay(1000);
-                        const shot = await page.screenshot({ encoding: 'base64' });
-                        socket.emit('screenshot-update', { img: `data:image/png;base64,${shot}`, title: "PROCESSANDO..." });
+
+                    if (!success) {
+                        socket.emit('log', `🔴 Falha definitiva no Prompt ${i+1} após 3 tentativas.`);
                     }
-                    if (text.startsWith('IMAGES_CAPTURED:')) {
-                        const parts = text.split(':');
-                        socket.emit('new-images', { index: parts[1], urls: JSON.parse(parts[2]) });
-                    }
+                }
+
+                socket.emit('log', "🏁 AUTOMAÇÃO FINALIZADA COM SUCESSO!");
+                // Desbloqueio final
+                await page.evaluate(() => {
+                    const inputs = document.querySelectorAll('input, textarea');
+                    inputs.forEach(el => { el.style.pointerEvents = 'auto'; el.readOnly = false; });
                 });
             });
 
-        } catch (error) {
-            socket.emit('log', `❌ Erro: ${error.message}`);
-            if (browser) await browser.close();
+        } catch (err) {
+            socket.emit('log', `💥 ERRO NO SERVIDOR: ${err.message}`);
         }
     });
 
     socket.on('stop-automation', async () => {
         if (browser) await browser.close();
-        socket.emit('log', "🛑 Parado.");
+        socket.emit('log', "🛑 Operação interrompida pelo usuário.");
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Server Ultra Pro rodando na porta ${PORT}`));
