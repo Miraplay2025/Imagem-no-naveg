@@ -64,6 +64,8 @@ io.on('connection', (socket) => {
             socket.emit('automation-status', { showConfirm: true });
             socket.emit('log', "👀 Aguardando confirmação visual do usuário...");
 
+            // Removido o socket.once de dentro para evitar empilhamento de listeners
+            socket.removeAllListeners('confirm-start'); 
             socket.once('confirm-start', async () => {
                 socket.emit('log', "✅ Confirmação recebida! Iniciando automação...");
                 
@@ -77,14 +79,19 @@ io.on('connection', (socket) => {
                         socket.emit('log', `📝 Processando Prompt ${i + 1}/${prompts.length} (Tentativa ${attempts})`);
 
                         try {
+                            if (!page) throw new Error("Página perdida");
+                            await page.bringToFront();
+
                             const existingImages = await page.evaluate(() => {
                                 return [...document.querySelectorAll('img[alt="Imagem gerada"]')].map(img => img.src);
                             });
 
+                            // Injeção de texto com foco forçado
                             await page.evaluate((text) => {
                                 const inputEl = document.querySelector('div[role="textbox"]') || document.querySelector('textarea');
                                 if (!inputEl) throw new Error("Campo de texto não encontrado");
 
+                                inputEl.click();
                                 inputEl.focus();
                                 document.execCommand('selectAll', false, null);
                                 document.execCommand('delete', false, null);
@@ -98,13 +105,16 @@ io.on('connection', (socket) => {
                                 inputEl.dispatchEvent(new Event('input', { bubbles: true }));
                             }, currentPrompt);
 
-                            await delay(1000);
+                            await delay(1500);
 
                             const clicked = await page.evaluate(() => {
                                 const btn = [...document.querySelectorAll("button, i, span")].find(e => 
                                     e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward")
                                 );
-                                if (btn) { btn.click(); return true; }
+                                if (btn) { 
+                                    btn.click(); 
+                                    return true; 
+                                }
                                 return false;
                             });
 
@@ -112,8 +122,8 @@ io.on('connection', (socket) => {
 
                             socket.emit('log', `⏳ Aguardando o Flow iniciar a geração...`);
 
-                            // AGUARDAR CARREGAMENTO APARECER
-                            await page.waitForSelector('.kAxcVK', { timeout: 30000 });
+                            // AGUARDAR CARREGAMENTO APARECER (Aumentado tempo para 45s)
+                            await page.waitForSelector('.kAxcVK', { timeout: 45000 });
                             
                             // PRINT DE INÍCIO DE PROCESSAMENTO
                             const startGenSnap = await page.screenshot({ encoding: 'base64' });
@@ -157,7 +167,6 @@ io.on('connection', (socket) => {
                             }
 
                         } catch (err) {
-                            // PRINT EM CASO DE ERRO
                             const errorSnap = await page.screenshot({ encoding: 'base64' }).catch(() => null);
                             if(errorSnap) {
                                 socket.emit('screenshot-update', {
