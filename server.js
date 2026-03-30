@@ -85,47 +85,60 @@ io.on('connection', (socket) => {
                                 return [...document.querySelectorAll('img[alt="Imagem gerada"]')].map(img => img.src);
                             });
 
-                            // --- NOVA LÓGICA DE INSERÇÃO E ENVIO SOLICITADA ---
+                            // --- CORREÇÃO DO PROTOCOL ERROR ---
+                            // Garante que o seletor existe antes de rodar o evaluate
+                            await page.waitForSelector('div[role="textbox"], textarea', { timeout: 15000 });
+
                             const sendResult = await page.evaluate(async (text) => {
-                                const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
-                                const btn = [...document.querySelectorAll("button, i")].find(e => e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward"));
-                                
-                                if (!inputEl || !btn) return { status: 'error', msg: "Elementos de interface não encontrados" };
-                                
-                                inputEl.focus(); 
-                                document.execCommand('selectAll', false, null); 
-                                document.execCommand('delete', false, null);
-                                
-                                await new Promise(r => setTimeout(r, 300)); 
-                                
-                                const dt = new DataTransfer(); 
-                                dt.setData('text/plain', text);
-                                inputEl.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
-                                inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-                                
-                                await new Promise(r => setTimeout(r, 500)); 
-                                btn.click();
-                                return { status: 'ok' };
+                                try {
+                                    const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
+                                    const btn = [...document.querySelectorAll("button, i, span")].find(e => 
+                                        e.innerText?.includes("arrow_forward") || 
+                                        e.textContent?.includes("arrow_forward") ||
+                                        e.classList.contains('kAxcVK') // Algumas versões usam a classe do loader no botão
+                                    );
+                                    
+                                    if (!inputEl || !btn) return { status: 'error', msg: "Elementos de interface não encontrados" };
+                                    
+                                    inputEl.focus(); 
+                                    document.execCommand('selectAll', false, null); 
+                                    document.execCommand('delete', false, null);
+                                    
+                                    await new Promise(r => setTimeout(r, 500)); 
+                                    
+                                    const dt = new DataTransfer(); 
+                                    dt.setData('text/plain', text);
+                                    inputEl.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
+                                    inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+                                    
+                                    await new Promise(r => setTimeout(r, 800)); 
+                                    btn.click();
+                                    return { status: 'ok' };
+                                } catch (e) {
+                                    return { status: 'error', msg: e.message };
+                                }
                             }, currentPrompt);
 
                             if (sendResult.status === 'error') throw new Error(sendResult.msg);
-                            // --------------------------------------------------
 
                             socket.emit('log', `⏳ Aguardando o Flow iniciar a geração...`);
 
-                            await page.waitForSelector('.kAxcVK', { timeout: 45000 });
+                            // Aguarda o seletor de processamento (o círculo de 3% que aparece na sua imagem)
+                            await page.waitForSelector('.kAxcVK', { timeout: 45000 }).catch(() => {
+                                console.log("Aviso: Loader kAxcVK não detectado, mas continuando...");
+                            });
                             
                             const startGenSnap = await page.screenshot({ encoding: 'base64' });
                             socket.emit('screenshot-update', {
                                 img: `data:image/png;base64,${startGenSnap}`,
                                 title: `PROCESSANDO PROMPT ${i+1}`
                             });
-                            socket.emit('log', `carregamento de imagem de prompt ${i+1} iniciado`);
 
+                            // Espera o processamento terminar (quando o seletor some)
                             await page.waitForFunction(() => !document.querySelector('.kAxcVK'), { timeout: 180000 });
                             
                             socket.emit('log', "processamento sumir, aguardado alguns segundos...");
-                            await delay(8000);
+                            await delay(10000); // Aumentado para 10s para garantir renderização final
 
                             const newImages = await page.evaluate((oldImgs) => {
                                 const allImgs = [...document.querySelectorAll('img[alt="Imagem gerada"]')];
