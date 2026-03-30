@@ -64,7 +64,6 @@ io.on('connection', (socket) => {
             socket.emit('automation-status', { showConfirm: true });
             socket.emit('log', "👀 Aguardando confirmação visual do usuário...");
 
-            // Removido o socket.once de dentro para evitar empilhamento de listeners
             socket.removeAllListeners('confirm-start'); 
             socket.once('confirm-start', async () => {
                 socket.emit('log', "✅ Confirmação recebida! Iniciando automação...");
@@ -86,46 +85,36 @@ io.on('connection', (socket) => {
                                 return [...document.querySelectorAll('img[alt="Imagem gerada"]')].map(img => img.src);
                             });
 
-                            // Injeção de texto com foco forçado
-                            await page.evaluate((text) => {
-                                const inputEl = document.querySelector('div[role="textbox"]') || document.querySelector('textarea');
-                                if (!inputEl) throw new Error("Campo de texto não encontrado");
-
-                                inputEl.click();
-                                inputEl.focus();
-                                document.execCommand('selectAll', false, null);
+                            // --- NOVA LÓGICA DE INSERÇÃO E ENVIO SOLICITADA ---
+                            const sendResult = await page.evaluate(async (text) => {
+                                const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
+                                const btn = [...document.querySelectorAll("button, i")].find(e => e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward"));
+                                
+                                if (!inputEl || !btn) return { status: 'error', msg: "Elementos de interface não encontrados" };
+                                
+                                inputEl.focus(); 
+                                document.execCommand('selectAll', false, null); 
                                 document.execCommand('delete', false, null);
-
-                                const dt = new DataTransfer();
+                                
+                                await new Promise(r => setTimeout(r, 300)); 
+                                
+                                const dt = new DataTransfer(); 
                                 dt.setData('text/plain', text);
-                                const pasteEvent = new ClipboardEvent('paste', {
-                                    clipboardData: dt, bubbles: true, cancelable: true
-                                });
-                                inputEl.dispatchEvent(pasteEvent);
+                                inputEl.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
                                 inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+                                
+                                await new Promise(r => setTimeout(r, 500)); 
+                                btn.click();
+                                return { status: 'ok' };
                             }, currentPrompt);
 
-                            await delay(1500);
-
-                            const clicked = await page.evaluate(() => {
-                                const btn = [...document.querySelectorAll("button, i, span")].find(e => 
-                                    e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward")
-                                );
-                                if (btn) { 
-                                    btn.click(); 
-                                    return true; 
-                                }
-                                return false;
-                            });
-
-                            if (!clicked) throw new Error("Botão de envio não encontrado");
+                            if (sendResult.status === 'error') throw new Error(sendResult.msg);
+                            // --------------------------------------------------
 
                             socket.emit('log', `⏳ Aguardando o Flow iniciar a geração...`);
 
-                            // AGUARDAR CARREGAMENTO APARECER (Aumentado tempo para 45s)
                             await page.waitForSelector('.kAxcVK', { timeout: 45000 });
                             
-                            // PRINT DE INÍCIO DE PROCESSAMENTO
                             const startGenSnap = await page.screenshot({ encoding: 'base64' });
                             socket.emit('screenshot-update', {
                                 img: `data:image/png;base64,${startGenSnap}`,
@@ -133,7 +122,6 @@ io.on('connection', (socket) => {
                             });
                             socket.emit('log', `carregamento de imagem de prompt ${i+1} iniciado`);
 
-                            // AGUARDAR CARREGAMENTO SUMIR
                             await page.waitForFunction(() => !document.querySelector('.kAxcVK'), { timeout: 180000 });
                             
                             socket.emit('log', "processamento sumir, aguardado alguns segundos...");
