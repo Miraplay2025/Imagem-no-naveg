@@ -38,30 +38,12 @@
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
         }
         
-        .asset-preview { width: 100%; height: 70px; object-fit: cover; border-radius: 8px; }
-        .asset-item { position: relative; }
-        
-        .remove-btn { 
-            position: absolute; top: -6px; right: -6px; 
-            background: #ef4444; color: white; border-radius: 50%; 
-            width: 20px; height: 20px; font-size: 12px; 
-            display: flex; align-items: center; justify-content: center;
-            cursor: pointer; border: 2px solid #0f172a; font-weight: bold;
-            z-index: 10;
-        }
-        
         .btn-main { transition: all 0.2s; }
         .btn-main:disabled { opacity: 0.5; cursor: not-allowed; }
         .btn-main:active:not(:disabled) { transform: scale(0.98); }
 
         .pending { border: 1px dashed #ef4444 !important; }
         .loaded { border: 1px solid #10b981 !important; background: rgba(16, 185, 129, 0.05) !important; }
-        
-        /* Efeito de brilho para novas imagens */
-        .new-result-card {
-            border: 1px solid rgba(59, 130, 246, 0.3);
-            transition: all 0.5s ease;
-        }
     </style>
 </head>
 <body class="p-4 flex flex-col items-center pb-20">
@@ -83,24 +65,16 @@
 
         <input id="flow-url" type="text" placeholder="Link do Projeto Flow" class="w-full p-4 mobile-field outline-none text-sm font-medium">
         
-        <div class="grid grid-cols-2 gap-2">
-            <label id="label-cookies" class="block p-3 text-center mobile-field cursor-pointer text-[10px] bg-slate-900/50 border-dashed border-2 border-slate-700 pending">
-                <span class="block text-lg mb-1">🔑</span> COOKIES
+        <div class="grid grid-cols-1">
+            <label id="label-cookies" class="block p-4 text-center mobile-field cursor-pointer text-[10px] bg-slate-900/50 border-dashed border-2 border-slate-700 pending">
+                <span class="block text-lg mb-1">🔑</span> CARREGAR COOKIES (JSON)
                 <input type="file" id="cookies-file" class="hidden" accept=".json">
-                <div id="cookie-info" class="hidden mt-1 text-green-400 font-bold">✓ OK</div>
-            </label>
-
-            <label class="block p-3 text-center mobile-field cursor-pointer text-[10px] bg-slate-900/50 border-dashed border-2 border-slate-700 hover:border-blue-500">
-                <span class="block text-lg mb-1">🖼️</span> ASSETS
-                <input type="file" id="assets-file" class="hidden" multiple accept="image/*">
-                <div id="assets-count" class="hidden mt-1 text-blue-400 font-bold">0 un</div>
+                <div id="cookie-info" class="hidden mt-1 text-green-400 font-bold">✓ COOKIES PRONTOS</div>
             </label>
         </div>
 
-        <div id="assets-preview-container" class="grid grid-cols-4 gap-2 hidden bg-slate-900/80 p-3 rounded-xl border border-slate-800"></div>
-
         <div class="relative">
-            <textarea id="prompt-input" class="w-full p-4 mobile-field h-40 outline-none text-sm resize-none" placeholder="Prompt 1...&#10;Prompt 2..."></textarea>
+            <textarea id="prompt-input" class="w-full p-4 mobile-field h-44 outline-none text-sm resize-none" placeholder="Digite seus prompts aqui...&#10;Um por linha ou separado por 'Prompt:'"></textarea>
             <div class="absolute bottom-2 right-2 text-[9px] text-slate-500 font-mono" id="prompt-stats">Aguardando Prompts</div>
         </div>
         
@@ -109,10 +83,10 @@
 
         <div id="confirm-box" class="hidden p-5 bg-blue-950/40 border-2 border-blue-500/50 rounded-2xl text-center space-y-4 backdrop-blur-sm">
             <div class="space-y-1">
-                <p class="text-blue-400 font-black text-sm uppercase">Página Detectada</p>
-                <p class="text-[11px] text-slate-300 italic">Verifique o print acima. Se o login foi bem sucedido, confirme para iniciar a automação.</p>
+                <p class="text-blue-400 font-black text-sm uppercase">Página Carregada</p>
+                <p class="text-[11px] text-slate-300 italic">Verifique o print acima. Se o Flow carregou corretamente, confirme abaixo.</p>
             </div>
-            <button id="btn-confirm" class="w-full p-4 bg-blue-500 hover:bg-blue-400 text-white font-black rounded-xl">INJETAR E INICIAR</button>
+            <button id="btn-confirm" class="w-full p-4 bg-blue-500 hover:bg-blue-400 text-white font-black rounded-xl">CONFIRMAR E INJETAR</button>
         </div>
 
         <div class="space-y-2">
@@ -126,7 +100,6 @@
     <script>
         const socket = io();
         let cookiesBase64 = null;
-        let referenceAssets = [];
         const state = { prompts: [] };
 
         // Carregar Cookies
@@ -141,59 +114,15 @@
                     cookiesBase64 = btoa(unescape(encodeURIComponent(cleanJson)));
                     document.getElementById('cookie-info').classList.remove('hidden');
                     document.getElementById('label-cookies').classList.replace('pending', 'loaded');
-                    addLog("🔑 Cookies validados e carregados.", "success");
+                    addLog("🔑 Cookies validados e prontos.", "success");
                 } catch(err) {
-                    addLog("❌ ERRO NOS COOKIES: JSON Inválido", "error");
+                    addLog("❌ ERRO: JSON de cookies inválido.", "error");
                 }
             };
             reader.readAsText(file);
         };
 
-        // Carregar Assets (Imagens de Referência)
-        document.getElementById('assets-file').onchange = async (e) => {
-            const files = Array.from(e.target.files);
-            for (const file of files) {
-                const reader = new FileReader();
-                reader.onload = (ev) => {
-                    referenceAssets.push({
-                        id: Math.random().toString(36).substr(2, 9),
-                        name: file.name,
-                        data: ev.target.result
-                    });
-                    renderAssets();
-                };
-                reader.readAsDataURL(file);
-            }
-            e.target.value = '';
-        };
-
-        function renderAssets() {
-            const container = document.getElementById('assets-preview-container');
-            const countLabel = document.getElementById('assets-count');
-            container.innerHTML = '';
-            if (referenceAssets.length > 0) {
-                container.classList.remove('hidden');
-                countLabel.classList.remove('hidden');
-                countLabel.textContent = `${referenceAssets.length} un`;
-                referenceAssets.forEach(asset => {
-                    const div = document.createElement('div');
-                    div.className = "asset-item";
-                    div.innerHTML = `<div class="remove-btn" onclick="removeAsset('${asset.id}')">×</div>
-                                     <img src="${asset.data}" class="asset-preview border border-slate-700">`;
-                    container.appendChild(div);
-                });
-            } else {
-                container.classList.add('hidden');
-                countLabel.classList.add('hidden');
-            }
-        }
-
-        window.removeAsset = (id) => {
-            referenceAssets = referenceAssets.filter(a => a.id !== id);
-            renderAssets();
-        };
-
-        // Processamento de Prompts
+        // Detectar e contar Prompts
         document.getElementById('prompt-input').oninput = (e) => {
             const val = e.target.value.trim();
             if (val.toLowerCase().includes("prompt")) {
@@ -202,82 +131,53 @@
             } else {
                 state.prompts = val.split('\n').map(l => l.trim()).filter(Boolean);
             }
-            document.getElementById('prompt-stats').textContent = `${state.prompts.length} Prompts Detectados`;
+            document.getElementById('prompt-stats').textContent = `${state.prompts.length} Prompts Identificados`;
         };
 
-        // Controle de Botões (Start)
+        // Iniciar
         document.getElementById('btn-start').onclick = () => {
             const url = document.getElementById('flow-url').value;
             if (!url || !cookiesBase64 || state.prompts.length === 0) {
-                addLog("⚠️ Verifique: Link, Cookies e Prompts são obrigatórios!", "warning");
+                addLog("⚠️ Faltam dados: Link, Cookies ou Prompts!", "warning");
                 return;
             }
             socket.emit('start-automation', {
                 link: url, 
                 prompts: state.prompts,
-                cookiesBase64: cookiesBase64,
-                assets: referenceAssets 
+                cookiesBase64: cookiesBase64
             });
             document.getElementById('btn-start').classList.add('hidden');
             document.getElementById('btn-stop').classList.remove('hidden');
         };
 
-        // Controle de Botões (Confirmação)
+        // Confirmação Manual
         document.getElementById('btn-confirm').onclick = () => {
             socket.emit('confirm-start');
             document.getElementById('confirm-box').classList.add('hidden');
-            addLog("🚀 Injeção confirmada. Iniciando fluxo...", "success");
         };
 
-        // Controle de Botões (Stop) - Sem Recarregar Página
-        document.getElementById('btn-stop').onclick = () => { 
-            socket.emit('stop-automation'); 
-            document.getElementById('btn-stop').classList.add('hidden');
-            document.getElementById('btn-start').classList.remove('hidden');
-            document.getElementById('confirm-box').classList.add('hidden');
-            document.getElementById('robot-view').classList.add('hidden');
-            addLog("🛑 Navegador fechado. Interface mantida.", "warning");
-        };
-
-        // --- HANDLERS DO SOCKET ---
-
+        // Receber Screenshot
         socket.on('screenshot-update', (data) => {
             document.getElementById('robot-view').classList.remove('hidden');
             document.getElementById('screen-img').src = data.img;
             document.getElementById('view-title').textContent = data.title;
+            document.getElementById('robot-view').scrollIntoView({ behavior: 'smooth' });
         });
 
+        // Status de Confirmação
         socket.on('automation-status', (data) => {
             if (data.showConfirm) {
                 document.getElementById('confirm-box').classList.remove('hidden');
-                addLog("👀 Verifique a visualização ao vivo antes de confirmar.", "warning");
             }
         });
 
+        // Logs
         socket.on('log', (msg) => {
             let type = "info";
-            if (msg.includes("❌") || msg.toLowerCase().includes("erro")) type = "error";
-            if (msg.includes("✅") || msg.toLowerCase().includes("sucesso") || msg.toLowerCase().includes("finalizada")) type = "success";
-            if (msg.includes("⚠️") || msg.toLowerCase().includes("aguardando") || msg.toLowerCase().includes("tentativa")) type = "warning";
+            if (msg.includes("❌") || msg.toLowerCase().includes("erro") || msg.includes("🚫")) type = "error";
+            if (msg.includes("✅") || msg.includes("Sucesso") || msg.includes("🏁")) type = "success";
+            if (msg.includes("⚠️") || msg.includes("⏳") || msg.includes("👀")) type = "warning";
             addLog(msg, type);
-        });
-
-        socket.on('new-images', (data) => {
-            const container = document.getElementById('results');
-            const div = document.createElement('div');
-            div.className = "bg-slate-900/90 p-4 rounded-2xl border border-slate-800 space-y-3 animate-bounce new-result-card";
-            
-            div.innerHTML = `
-                <div class="flex justify-between items-center text-[10px] px-1">
-                    <span class="text-blue-400 font-bold uppercase">PROMPT #${data.index} COMPLETO</span>
-                    <span class="text-slate-500 font-mono text-[8px] italic">Extraído do Flow</span>
-                </div>
-                <div class="grid grid-cols-2 gap-2">
-                    ${data.urls.map(u => `<img src="${u}" class="rounded-xl border border-slate-700 shadow-md hover:scale-105 transition-transform duration-300">`).join('')}
-                </div>
-            `;
-            container.prepend(div);
-            setTimeout(() => div.classList.remove('animate-bounce'), 1200);
         });
 
         function addLog(msg, type) {
@@ -289,6 +189,33 @@
             logBox.appendChild(entry);
             logBox.scrollTop = logBox.scrollHeight;
         }
+
+        // Exibir Imagens Geradas
+        socket.on('new-images', (data) => {
+            const div = document.createElement('div');
+            div.className = "bg-slate-900/80 p-3 rounded-2xl border border-slate-800 space-y-2 animate-bounce";
+            div.innerHTML = `
+                <div class="flex justify-between items-center text-[10px] px-1">
+                    <span class="text-blue-400 font-bold uppercase">Prompt #${data.index}</span>
+                    <span class="text-slate-500 font-mono text-[8px] italic">Resultado Capturado</span>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    ${data.urls.map(u => `<img src="${u}" class="rounded-xl border border-slate-700 shadow-lg">`).join('')}
+                </div>
+            `;
+            document.getElementById('results').prepend(div);
+            setTimeout(() => div.classList.remove('animate-bounce'), 1000);
+        });
+
+        // Parar sem recarregar a página
+        document.getElementById('btn-stop').onclick = () => { 
+            socket.emit('stop-automation'); 
+            document.getElementById('btn-stop').classList.add('hidden');
+            document.getElementById('btn-start').classList.remove('hidden');
+            document.getElementById('confirm-box').classList.add('hidden');
+            document.getElementById('robot-view').classList.add('hidden');
+            addLog("🛑 Automação interrompida pelo usuário. Navegador fechado.", "warning");
+        };
     </script>
 </body>
 </html>
