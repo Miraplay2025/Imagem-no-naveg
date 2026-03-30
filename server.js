@@ -60,6 +60,7 @@ io.on('connection', (socket) => {
             socket.once('confirm-start', async () => {
                 socket.emit('log', "✅ Confirmação recebida! Injetando scripts de automação...");
 
+                // Injeta Assets no LocalStorage
                 await page.evaluate((assets) => {
                     const formattedAssets = assets.map(a => ({
                         id: a.id,
@@ -69,7 +70,9 @@ io.on('connection', (socket) => {
                     localStorage.setItem("flow_persistent_assets_v3", JSON.stringify(formattedAssets));
                 }, assets);
 
+                // Injeta a lógica de automação original
                 await page.evaluate((promptsList) => {
+                    // --- ESTADO E UTILITÁRIOS ---
                     window.state = {
                         prompts: promptsList,
                         currentIndex: 0,
@@ -80,62 +83,19 @@ io.on('connection', (socket) => {
                     };
 
                     window.wait = (ms) => new Promise(r => setTimeout(r, ms));
-                    
-                    window.log = (msg, type) => {
-                        console.log(`AUTO_LOG:${type}:${msg}`);
-                    };
+                    window.log = (msg, type) => { console.log(`AUTO_LOG:${type}:${msg}`); };
 
+                    // --- COMPONENTES ORIGINAIS ---
                     window.KeyboardBlocker = {
                         injectStyle: () => {
                             if (document.getElementById('awu-block-style')) return;
                             const style = document.createElement('style');
                             style.id = 'awu-block-style';
-                            style.innerHTML = `
-                                input, textarea, [contenteditable="true"] { 
-                                    inputmode: none !important; 
-                                    pointer-events: none !important; 
-                                }
-                                #awu-panel input, #awu-panel textarea, #awu-persistent-overlay * { 
-                                    pointer-events: auto !important; 
-                                }
-                            `;
+                            style.innerHTML = `input, textarea, [contenteditable="true"] { inputmode: none !important; pointer-events: none !important; }`;
                             document.head.appendChild(style);
                         },
-                        removeStyle: () => {
-                            const style = document.getElementById('awu-block-style');
-                            if (style) style.remove();
-                        },
-                        preventFocus: (e) => {
-                            if (window.state.isRunning && !e.target.closest('#awu-panel')) {
-                                e.preventDefault();
-                                e.target.blur();
-                            }
-                        },
-                        startBlocking: () => {
-                            window.KeyboardBlocker.injectStyle();
-                            const exec = () => {
-                                document.querySelectorAll('input, textarea, [contenteditable="true"]').forEach(el => {
-                                    el.setAttribute('inputmode', 'none');
-                                    el.setAttribute('readonly', 'true');
-                                });
-                            };
-                            exec();
-                            window.state.blockObserver = new MutationObserver(exec);
-                            window.state.blockObserver.observe(document.body, { childList: true, subtree: true });
-                            window.addEventListener('focusin', window.KeyboardBlocker.preventFocus, true);
-                        },
-                        stopBlocking: () => {
-                            window.KeyboardBlocker.removeStyle();
-                            if (window.state.blockObserver) {
-                                window.state.blockObserver.disconnect();
-                                window.state.blockObserver = null;
-                            }
-                            window.removeEventListener('focusin', window.KeyboardBlocker.preventFocus, true);
-                            document.querySelectorAll('input, textarea, [contenteditable="true"]').forEach(el => {
-                                el.removeAttribute('inputmode');
-                                el.removeAttribute('readonly');
-                            });
-                        }
+                        startBlocking: () => { window.KeyboardBlocker.injectStyle(); },
+                        stopBlocking: () => { const s = document.getElementById('awu-block-style'); if(s) s.remove(); }
                     };
 
                     window.PersistentManager = {
@@ -143,44 +103,28 @@ io.on('connection', (socket) => {
                             const assets = JSON.parse(localStorage.getItem("flow_persistent_assets_v3") || "[]");
                             const foundAssets = assets.filter(item => new RegExp(`\\b${item.nameNoExt}\\b`, 'gi').test(promptText));
                             if (foundAssets.length === 0) return;
-                            for (let idx = 0; idx < foundAssets.length; idx++) {
-                                const item = foundAssets[idx];
+                            for (let item of foundAssets) {
                                 try {
                                     let searchInput = document.querySelector('input[placeholder="Pesquisar recursos"]');
-                                    const addBtn = document.querySelector('button[class*="sc-addd5871-0"]') || [...document.querySelectorAll("button")].find(b => b.innerHTML.includes("add_2"));
-                                    if (!searchInput && addBtn) { addBtn.click(); await window.wait(800); searchInput = document.querySelector('input[placeholder="Pesquisar recursos"]'); }
+                                    if (!searchInput) {
+                                        const addBtn = document.querySelector('button[class*="sc-addd5871-0"]') || [...document.querySelectorAll("button")].find(b => b.innerHTML.includes("add_2"));
+                                        if (addBtn) { addBtn.click(); await window.wait(800); searchInput = document.querySelector('input[placeholder="Pesquisar recursos"]'); }
+                                    }
                                     if (!searchInput) continue;
                                     searchInput.focus(); document.execCommand('selectAll', false, null); document.execCommand('delete', false, null);
                                     const dt = new DataTransfer(); dt.setData('text/plain', item.nameNoExt);
                                     searchInput.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
                                     searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-                                    let targetItem = null;
-                                    for(let i=0; i<12; i++) {
-                                        const items = Array.from(document.querySelectorAll('.sc-3038c00b-16, .sc-dbfb6b4a-16'));
-                                        targetItem = items.find(el => {
-                                            const flowFileName = el.textContent.trim().toLowerCase();
-                                            const flowFileNameNoExt = flowFileName.replace(/\.[^/.]+$/, ""); 
-                                            return flowFileNameNoExt === item.nameNoExt.toLowerCase();
-                                        });
-                                        if(targetItem) break; await window.wait(600);
-                                    }
-                                    if (targetItem) { 
-                                        targetItem.click(); 
-                                        logCallback(`Imagem de Referência "${item.nameNoExt}" incluída.`, "success"); 
-                                        await window.wait(1200); 
-                                    } else { 
-                                        logCallback(`Não encontramos "${item.nameNoExt}" na lista do Flow.`, "error");
-                                        if (idx === foundAssets.length - 1) {
-                                             searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-                                             document.body.click(); 
-                                        }
-                                    }
-                                } catch (err) { logCallback(`Erro Persistência: ${err.message}`, "error"); }
+                                    await window.wait(1000);
+                                    const targetItem = [...document.querySelectorAll('.sc-3038c00b-16, .sc-dbfb6b4a-16')].find(el => el.textContent.toLowerCase().includes(item.nameNoExt.toLowerCase()));
+                                    if (targetItem) { targetItem.click(); logCallback(`Imagem de Referência "${item.nameNoExt}" incluída.`, "success"); await window.wait(1200); }
+                                } catch (e) { logCallback("Erro na persistência", "error"); }
                             }
                         }
                     };
 
-                    window.processPrompts = async () => {
+                    // --- FUNÇÃO PROCESS PROMPTS (IDÊNTICA À SOLICITADA) ---
+                    window.processPrompts = async function() {
                         window.log("Iniciando processo de automação...", "success"); 
                         window.state.isRunning = true; 
                         window.state.stopRequested = false;
@@ -205,46 +149,28 @@ io.on('connection', (socket) => {
                                 attempts++;
                                 window.state.initialUrls = new Set(getUIStatus().imgs);
                                 await window.PersistentManager.injectAssets(currentPrompt, window.log);
-                                
-                                // LOCAL DA CORREÇÃO: Seleção robusta e injeção de comando
-                                const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea#prompt-textarea");
-                                const btn = [...document.querySelectorAll("button")].find(e => e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward") || e.querySelector('i')?.textContent.includes("arrow_forward"));
-                                
-                                if (!inputEl) { 
-                                    window.log("Campo de texto não encontrado. Aguardando...", "warning");
+
+                                const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
+                                const btn = [...document.querySelectorAll("button, i")].find(e => e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward"));
+
+                                if (!inputEl || !btn) { 
+                                    window.log("Elementos de interface não encontrados. Aguardando...", "warning");
                                     await window.wait(2000); 
                                     continue; 
                                 }
-                                
-                                inputEl.focus();
-                                await window.wait(200);
+
+                                inputEl.focus(); 
                                 document.execCommand('selectAll', false, null); 
                                 document.execCommand('delete', false, null);
-                                await window.wait(200);
+                                await window.wait(300); 
 
-                                // Injeção via DataTransfer (Simula Paste real)
-                                const dataTransfer = new DataTransfer();
-                                dataTransfer.setData('text/plain', currentPrompt);
-                                inputEl.dispatchEvent(new ClipboardEvent('paste', {
-                                    clipboardData: dataTransfer,
-                                    bubbles: true,
-                                    cancelable: true
-                                }));
-                                
-                                // Fallback caso o paste falhe
-                                if (inputEl.innerText.trim() === "") {
-                                    document.execCommand('insertText', false, currentPrompt);
-                                }
-                                
+                                const dt = new DataTransfer(); 
+                                dt.setData('text/plain', currentPrompt);
+                                inputEl.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
                                 inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-                                await window.wait(500);
 
-                                if (!btn) {
-                                    window.log("Botão de envio não encontrado.", "error");
-                                    break;
-                                }
-
-                                window.log(`Enviando prompt [${i+1}] (T${attempts})...`, "info"); 
+                                window.log(`Enviando prompt [${i+1}] (Tentativa ${attempts})...`, "info"); 
+                                await window.wait(500); 
                                 btn.click();
                                 console.log("ACTION:SCREENSHOT_PROMPT");
 
@@ -253,7 +179,7 @@ io.on('connection', (socket) => {
                                     if (getUIStatus().processing) { startedProcessing = true; break; } 
                                     await window.wait(1000); 
                                 }
-                                
+
                                 let waitTimer = 0;
                                 const MAX_WAIT = 120;
                                 while (!window.state.stopRequested && waitTimer < MAX_WAIT) {
@@ -263,23 +189,30 @@ io.on('connection', (socket) => {
                                         waitTimer += 2; 
                                         continue; 
                                     }
-                                    
                                     await window.wait(4000); 
                                     const finalStatus = getUIStatus();
                                     const newImages = finalStatus.imgs.filter(url => !window.state.initialUrls.has(url) && !window.state.capturedBlobs.some(b => b.url === url));
-                                    
+
                                     if (newImages.length >= 2) {
                                         window.log(`Sucesso: [${newImages.length}] imagens no prompt [${i+1}]`, "success");
                                         console.log(`IMAGES_CAPTURED:${i+1}:${JSON.stringify(newImages)}`);
                                         promptResolved = true; 
                                         window.state.currentIndex = i + 1; 
                                         break;
-                                    } else {
+                                    } else if (newImages.length === 1) {
+                                        window.log(`Apenas 1 imagem detectada. Reiniciando prompt [${i+1}]...`, "warning");
+                                        await window.wait(3000);
+                                        break; 
+                                    } else { 
                                         if (attempts < MAX_ATTEMPTS) {
-                                            window.log(`Falha na detecção das imagens (T${attempts}). Tentando novamente...`, "warning");
-                                            await window.wait(2000);
+                                            window.log(`Aguardando renderização final do prompt [${i+1}]...`, "warning");
+                                            await window.wait(5000);
+                                            const recheck = getUIStatus();
+                                            const reImages = recheck.imgs.filter(url => !window.state.initialUrls.has(url) && !window.state.capturedBlobs.some(b => b.url === url));
+                                            if(reImages.length >= 2) continue;
+                                            window.log(`Nenhuma imagem detectada após carregamento (T${attempts}). Reiniciando...`, "reinject"); 
                                         } else {
-                                            window.log(`Falha definitiva no prompt [${i+1}].`, "error");
+                                            window.log(`Falha definitiva no prompt [${i+1}] após ${MAX_ATTEMPTS} tentativas.`, "error");
                                             window.state.currentIndex = i + 1;
                                             promptResolved = true;
                                         }
@@ -298,6 +231,7 @@ io.on('connection', (socket) => {
                     window.processPrompts();
                 }, prompts);
 
+                // Monitoramento de console para comunicação Browser -> Servidor
                 page.on('console', async (msg) => {
                     const text = msg.text();
                     if (text.startsWith('AUTO_LOG:')) {
