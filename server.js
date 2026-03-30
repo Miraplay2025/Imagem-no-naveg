@@ -47,7 +47,7 @@ io.on('connection', (socket) => {
             socket.emit('log', `🌐 Acessando: ${link}`);
             await page.goto(link, { waitUntil: 'networkidle2', timeout: 60000 });
 
-            await delay(7000); // Aumentado para estabilidade inicial
+            await delay(5000);
 
             const screenshot = await page.screenshot({ encoding: 'base64' });
             socket.emit('screenshot-update', { 
@@ -111,6 +111,7 @@ io.on('connection', (socket) => {
                         }
                     };
 
+                    // --- INCORPORAÇÃO EXATA DA LÓGICA COM CLASSES ATUALIZADAS ---
                     window.processPrompts = async function() {
                         window.log("Iniciando processo de automação...", "success"); 
                         window.state.isRunning = true; 
@@ -118,15 +119,17 @@ io.on('connection', (socket) => {
                         window.KeyboardBlocker.startBlocking();
 
                         const getUIStatus = () => {
-                            // Verifica se há elementos de erro na UI para evitar capturas inválidas
-                            const hasError = !!document.querySelector('div[class*="error"], .sc-falha'); 
-                            const processing = !!document.querySelector(".kAxcVK, .fTmHUY, .dukARQ, [class*='loading']");
-                            const imgs = Array.from(document.querySelectorAll('img.sc-5923b123-1')).map(img => img.src);
+                            // CLASSES ATUALIZADAS CONFORME FORNECIDO
+                            const processing = !!document.querySelector(".kAxcVK"); // Classe de carregamento (99%)
+                            const hasError = !!document.querySelector(".cstgBg"); // Classe de erro (Ops!)
+                            const imgs = Array.from(document.querySelectorAll('img.sc-5923b123-1')).map(img => img.src); // Classe das imagens geradas
+                            
                             return { processing, imgs, hasError };
                         };
 
                         for (let i = window.state.currentIndex; i < window.state.prompts.length; i++) {
                             if (window.state.stopRequested) break;
+                            
                             const currentPrompt = window.state.prompts[i]; 
                             console.log(`PROMPT_INDEX_UPDATE:${i + 1}`);
                             
@@ -136,6 +139,7 @@ io.on('connection', (socket) => {
 
                             while (!promptResolved && !window.state.stopRequested && attempts < MAX_ATTEMPTS) {
                                 attempts++;
+                                
                                 window.state.initialUrls = new Set(getUIStatus().imgs);
                                 await window.PersistentManager.injectAssets(currentPrompt, window.log);
                                 
@@ -143,68 +147,86 @@ io.on('connection', (socket) => {
                                 const btn = [...document.querySelectorAll("button, i")].find(e => e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward"));
                                 
                                 if (!inputEl || !btn) { 
-                                    window.log("Interface não pronta. Aguardando...", "warning");
-                                    await window.wait(3000); 
+                                    window.log("Elementos de interface não encontrados. Aguardando...", "warning");
+                                    await window.wait(2000); 
                                     continue; 
                                 }
                                 
                                 inputEl.focus(); 
                                 document.execCommand('selectAll', false, null); 
                                 document.execCommand('delete', false, null);
-                                await window.wait(500); 
+                                await window.wait(300); 
                                 
                                 const dt = new DataTransfer(); 
                                 dt.setData('text/plain', currentPrompt);
                                 inputEl.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
                                 inputEl.dispatchEvent(new Event('input', { bubbles: true }));
                                 
-                                window.log(`Enviando prompt [${i+1}]...`, "info"); 
-                                await window.wait(800); 
+                                window.log(`Enviando prompt [${i+1}] (Tentativa ${attempts})...`, "info"); 
+                                await window.wait(500); 
                                 btn.click();
                                 console.log("ACTION:SCREENSHOT_PROMPT");
 
+                                // Aguarda até 15s para o loading aparecer
                                 let startedProcessing = false;
-                                for (let att = 0; att < 20; att++) { 
+                                for (let att = 0; att < 15; att++) { 
                                     if (getUIStatus().processing) { startedProcessing = true; break; } 
                                     await window.wait(1000); 
                                 }
                                 
                                 let waitTimer = 0;
-                                const MAX_WAIT = 150;
+                                const MAX_WAIT = 120;
                                 
                                 while (!window.state.stopRequested && waitTimer < MAX_WAIT) {
                                     const status = getUIStatus(); 
+
+                                    // Verifica se houve erro fatal durante a geração
+                                    if (status.hasError) {
+                                        window.log(`Erro detectado no Flow ("Ops! Algo deu errado"). Reiniciando tentativa...`, "error");
+                                        break; 
+                                    }
+
                                     if (status.processing) { 
-                                        await window.wait(2500); 
-                                        waitTimer += 2.5; 
+                                        await window.wait(2000); 
+                                        waitTimer += 2; 
                                         continue; 
                                     }
                                     
-                                    // Aguarda renderização final
-                                    await window.wait(5000); 
+                                    await window.wait(4000); 
                                     const finalStatus = getUIStatus();
                                     
                                     const newImages = finalStatus.imgs.filter(url => !window.state.initialUrls.has(url) && !window.state.capturedBlobs.some(b => b.url === url));
                                     
                                     if (newImages.length >= 2) {
-                                        window.log(`Sucesso: [${newImages.length}] imagens capturadas.`, "success");
+                                        window.log(`Sucesso: [${newImages.length}] imagens no prompt [${i+1}]`, "success");
                                         console.log(`IMAGES_CAPTURED:${i+1}:${JSON.stringify(newImages)}`);
                                         promptResolved = true; 
                                         window.state.currentIndex = i + 1; 
                                         break;
-                                    } else {
-                                        window.log(`Aguardando geração completa... (T${attempts})`, "warning");
-                                        await window.wait(5000);
-                                        const retryStatus = getUIStatus();
-                                        const retryImages = retryStatus.imgs.filter(url => !window.state.initialUrls.has(url));
-                                        if(retryImages.length >= 2) continue; 
-                                        break;
+                                    } else if (newImages.length === 1) {
+                                        window.log(`Apenas 1 imagem detectada. Reiniciando prompt [${i+1}]...`, "warning");
+                                        await window.wait(3000);
+                                        break; 
+                                    } else { 
+                                        if (attempts < MAX_ATTEMPTS) {
+                                            window.log(`Aguardando renderização final do prompt [${i+1}]...`, "warning");
+                                            await window.wait(5000);
+                                            const recheck = getUIStatus();
+                                            const reImages = recheck.imgs.filter(url => !window.state.initialUrls.has(url) && !window.state.capturedBlobs.some(b => b.url === url));
+                                            if(reImages.length >= 2) continue;
+                                            window.log(`Nenhuma imagem detectada após carregamento (T${attempts}). Reiniciando...`, "reinject"); 
+                                        } else {
+                                            window.log(`Falha definitiva no prompt [${i+1}] após ${MAX_ATTEMPTS} tentativas.`, "error");
+                                            window.state.currentIndex = i + 1;
+                                            promptResolved = true;
+                                        }
+                                        break; 
                                     }
                                 }
                             }
                         }
                         if (!window.state.stopRequested && window.state.currentIndex >= window.state.prompts.length) { 
-                            window.log("Automação concluída com sucesso!", "success"); 
+                            window.log("Automação finalizada!", "success"); 
                         }
                         window.KeyboardBlocker.stopBlocking();
                         window.state.isRunning = false;
@@ -219,9 +241,9 @@ io.on('connection', (socket) => {
                         socket.emit('log', text.split(':').slice(2).join(':'));
                     }
                     if (text === 'ACTION:SCREENSHOT_PROMPT') {
-                        await delay(2000);
+                        await delay(1000);
                         const shot = await page.screenshot({ encoding: 'base64' });
-                        socket.emit('screenshot-update', { img: `data:image/png;base64,${shot}`, title: "GERANDO IMAGENS..." });
+                        socket.emit('screenshot-update', { img: `data:image/png;base64,${shot}`, title: "PROCESSANDO..." });
                     }
                     if (text.startsWith('IMAGES_CAPTURED:')) {
                         const parts = text.split(':');
@@ -231,16 +253,16 @@ io.on('connection', (socket) => {
             });
 
         } catch (error) {
-            socket.emit('log', `❌ Erro Crítico: ${error.message}`);
+            socket.emit('log', `❌ Erro: ${error.message}`);
             if (browser) await browser.close();
         }
     });
 
     socket.on('stop-automation', async () => {
         if (browser) await browser.close();
-        socket.emit('log', "🛑 Automação interrompida.");
+        socket.emit('log', "🛑 Parado.");
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Servidor ativo na porta ${PORT}`));
+server.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
