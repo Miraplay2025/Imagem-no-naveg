@@ -1,7 +1,7 @@
 {
   "name": "auto-flow-ultra",
   "version": "1.0.0",
-  "description": "Automação para Flux/Flow via Puppeteer com Extensão",
+  "description": "Automação para Flux/Flow via Puppeteer Stealth Mode",
   "main": "server.js",
   "engines": {
     "node": ">=20.0.0"
@@ -12,8 +12,9 @@
   "dependencies": {
     "express": "^4.18.2",
     "puppeteer": "^21.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "socket.io": "^4.7.2",
-    "cors": "^2.8.5",
-    "unzipper": "^0.10.14"
+    "cors": "^2.8.5"
   }
 }
