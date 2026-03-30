@@ -23,7 +23,6 @@ io.on('connection', (socket) => {
         try {
             socket.emit('log', "🚀 Iniciando Puppeteer no Render...");
 
-            // Se já houver um browser aberto para esta conexão, fecha antes de iniciar
             if (browser) await browser.close().catch(() => {});
 
             browser = await puppeteer.launch({
@@ -41,11 +40,6 @@ io.on('connection', (socket) => {
             page = await browser.newPage();
             await page.setViewport({ width: 1280, height: 800 });
 
-            // Tratamento de erros de desconexão de frame/navegação
-            page.on('error', err => {
-                socket.emit('log', `❌ Erro na página: ${err.message}`, "error");
-            });
-
             socket.emit('log', "🔑 Aplicando cookies de autenticação...");
             const cookiesRaw = Buffer.from(cookiesBase64, 'base64').toString('utf-8');
             const cookies = JSON.parse(cookiesRaw);
@@ -53,14 +47,10 @@ io.on('connection', (socket) => {
 
             socket.emit('log', `🌐 Acessando: ${link}`);
             
-            // Try-catch específico para a navegação inicial
             try {
-                await page.goto(link, { 
-                    waitUntil: 'networkidle2', 
-                    timeout: 70000 
-                });
+                await page.goto(link, { waitUntil: 'networkidle2', timeout: 70000 });
             } catch (navError) {
-                socket.emit('log', "⚠️ Aviso: A página demorou a carregar 100%, tentando prosseguir mesmo assim...");
+                socket.emit('log', "⚠️ Aviso: Carregamento parcial, tentando prosseguir...");
             }
 
             await delay(5000);
@@ -84,15 +74,13 @@ io.on('connection', (socket) => {
 
                     while (attempts < 3 && !success) {
                         attempts++;
-                        socket.emit('log', `📝 Processando Prompt ${i + 1} (Tentativa ${attempts})`);
+                        socket.emit('log', `📝 Processando Prompt ${i + 1}/${prompts.length} (Tentativa ${attempts})`);
 
                         try {
-                            // Salvar imagens atuais antes de enviar
                             const existingImages = await page.evaluate(() => {
                                 return [...document.querySelectorAll('img[alt="Imagem gerada"]')].map(img => img.src);
                             });
 
-                            // Injeção de Prompt (Simulação de Colagem)
                             await page.evaluate((text) => {
                                 const inputEl = document.querySelector('div[role="textbox"]') || document.querySelector('textarea');
                                 if (!inputEl) throw new Error("Campo de texto não encontrado");
@@ -110,9 +98,8 @@ io.on('connection', (socket) => {
                                 inputEl.dispatchEvent(new Event('input', { bubbles: true }));
                             }, currentPrompt);
 
-                            await delay(800);
+                            await delay(1000);
 
-                            // Clique no botão enviar
                             const clicked = await page.evaluate(() => {
                                 const btn = [...document.querySelectorAll("button, i, span")].find(e => 
                                     e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward")
@@ -123,49 +110,67 @@ io.on('connection', (socket) => {
 
                             if (!clicked) throw new Error("Botão de envio não encontrado");
 
-                            // Monitorar carregamento
-                            try {
-                                await page.waitForSelector('.kAxcVK', { timeout: 15000 });
-                                socket.emit('log', `carregamento de imagem de prompt ${i+1} iniciado`);
-                                const loadingSnap = await page.screenshot({ encoding: 'base64' });
-                                socket.emit('screenshot-update', { img: `data:image/png;base64,${loadingSnap}`, title: "GERANDO..." });
-                            } catch (e) {
-                                socket.emit('log', "⏳ Aguardando processamento...");
-                            }
+                            socket.emit('log', `⏳ Aguardando o Flow iniciar a geração...`);
 
-                            // Esperar finalização
-                            await page.waitForFunction(() => !document.querySelector('.kAxcVK'), { timeout: 120000 });
+                            // AGUARDAR CARREGAMENTO APARECER
+                            await page.waitForSelector('.kAxcVK', { timeout: 30000 });
+                            
+                            // PRINT DE INÍCIO DE PROCESSAMENTO
+                            const startGenSnap = await page.screenshot({ encoding: 'base64' });
+                            socket.emit('screenshot-update', {
+                                img: `data:image/png;base64,${startGenSnap}`,
+                                title: `PROCESSANDO PROMPT ${i+1}`
+                            });
+                            socket.emit('log', `carregamento de imagem de prompt ${i+1} iniciado`);
+
+                            // AGUARDAR CARREGAMENTO SUMIR
+                            await page.waitForFunction(() => !document.querySelector('.kAxcVK'), { timeout: 180000 });
+                            
                             socket.emit('log', "processamento sumir, aguardado alguns segundos...");
-                            await delay(6000);
+                            await delay(8000);
 
-                            // Capturar novas imagens
                             const newImages = await page.evaluate((oldImgs) => {
-                                const news = [...document.querySelectorAll('img[alt="Imagem gerada"]')].filter(img => !oldImgs.includes(img.src));
+                                const allImgs = [...document.querySelectorAll('img[alt="Imagem gerada"]')];
+                                const news = allImgs.filter(img => !oldImgs.includes(img.src));
+                                
                                 return Promise.all(news.map(async (img) => {
-                                    const resp = await fetch(img.src);
-                                    const blob = await resp.blob();
-                                    return new Promise(r => {
-                                        const reader = new FileReader();
-                                        reader.onloadend = () => r(reader.result);
-                                        reader.readAsDataURL(blob);
-                                    });
+                                    try {
+                                        const resp = await fetch(img.src);
+                                        const blob = await resp.blob();
+                                        return new Promise(r => {
+                                            const reader = new FileReader();
+                                            reader.onloadend = () => r(reader.result);
+                                            reader.readAsDataURL(blob);
+                                        });
+                                    } catch (err) { return null; }
                                 }));
                             }, existingImages);
 
-                            if (newImages.length > 0) {
-                                socket.emit('new-images', { index: i + 1, urls: newImages });
-                                socket.emit('log', `✅ sucesso ${newImages.length} de imagens capturadas de prompt ${i+1}`);
+                            const validImages = newImages.filter(img => img !== null);
+
+                            if (validImages.length > 0) {
+                                socket.emit('new-images', { index: i + 1, urls: validImages });
+                                socket.emit('log', `✅ sucesso ${validImages.length} de imagens capturadas de prompt ${i+1}`);
                                 success = true;
                             } else {
                                 throw new Error(`nenhuma imagem encontrada no prompt ${i+1}`);
                             }
 
                         } catch (err) {
-                            socket.emit('log', `❌ Erro no prompt ${i+1}: ${err.message}`);
+                            // PRINT EM CASO DE ERRO
+                            const errorSnap = await page.screenshot({ encoding: 'base64' }).catch(() => null);
+                            if(errorSnap) {
+                                socket.emit('screenshot-update', {
+                                    img: `data:image/png;base64,${errorSnap}`,
+                                    title: `ERRO NO PROMPT ${i+1}`
+                                });
+                            }
+
+                            socket.emit('log', `❌ Erro no prompt ${i+1}: ${err.message}`, "error");
                             if (attempts < 3) {
                                 socket.emit('log', `reiviado o prompt ${i+1}...`);
                                 await page.reload({ waitUntil: 'networkidle2' }).catch(() => {});
-                                await delay(4000);
+                                await delay(5000);
                             } else {
                                 socket.emit('log', `🚫 erro definitive ao gerar imagens de prompt ${i+1} proseguindo pra o proximo prompt ${i+2}`);
                             }
@@ -193,4 +198,4 @@ io.on('connection', (socket) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Rodando na porta ${PORT}`));
+server.listen(PORT, () => console.log(`Server ON na porta ${PORT}`));
