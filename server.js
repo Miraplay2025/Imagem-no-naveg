@@ -13,7 +13,6 @@ app.use(express.static('public'));
 let browser = null;
 let page = null;
 
-// Função de espera para usar dentro do Puppeteer
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 io.on('connection', (socket) => {
@@ -40,20 +39,16 @@ io.on('connection', (socket) => {
             page = await browser.newPage();
             await page.setViewport({ width: 1280, height: 800 });
 
-            // 1. Aplicar Cookies
             socket.emit('log', "🔑 Aplicando cookies de autenticação...");
             const cookiesRaw = Buffer.from(cookiesBase64, 'base64').toString('utf-8');
             const cookies = JSON.parse(cookiesRaw);
             await page.setCookie(...cookies);
 
-            // 2. Acessar Link
             socket.emit('log', `🌐 Acessando: ${link}`);
             await page.goto(link, { waitUntil: 'networkidle2', timeout: 60000 });
 
-            // Aguarda um pouco mais para garantir renderização 200%
             await delay(5000);
 
-            // 3. Tirar Print para Confirmação do Usuário
             const screenshot = await page.screenshot({ encoding: 'base64' });
             socket.emit('screenshot-update', { 
                 img: `data:image/png;base64,${screenshot}`, 
@@ -62,11 +57,9 @@ io.on('connection', (socket) => {
             socket.emit('automation-status', { showConfirm: true });
             socket.emit('log', "👀 Aguardando confirmação visual do usuário...");
 
-            // Ouvir confirmação
             socket.once('confirm-start', async () => {
                 socket.emit('log', "✅ Confirmação recebida! Injetando scripts de automação...");
 
-                // Injetar os Assets (Imagens de Referência) no LocalStorage do navegador remoto
                 await page.evaluate((assets) => {
                     const formattedAssets = assets.map(a => ({
                         id: a.id,
@@ -76,9 +69,7 @@ io.on('connection', (socket) => {
                     localStorage.setItem("flow_persistent_assets_v3", JSON.stringify(formattedAssets));
                 }, assets);
 
-                // Injetar a lógica original de automação enviada
                 await page.evaluate((promptsList) => {
-                    // Estado interno do Script Injetado
                     window.state = {
                         prompts: promptsList,
                         currentIndex: 0,
@@ -90,14 +81,10 @@ io.on('connection', (socket) => {
 
                     window.wait = (ms) => new Promise(r => setTimeout(r, ms));
                     
-                    // Funções de Log que se comunicam de volta com o servidor via console
                     window.log = (msg, type) => {
                         console.log(`AUTO_LOG:${type}:${msg}`);
                     };
 
-                    // ---- INSERÇÃO DOS SEUS SCRIPTS ORIGINAIS ----
-                    
-                    // 1. KeyboardBlocker
                     window.KeyboardBlocker = {
                         injectStyle: () => {
                             if (document.getElementById('awu-block-style')) return;
@@ -151,7 +138,6 @@ io.on('connection', (socket) => {
                         }
                     };
 
-                    // 2. PersistentManager
                     window.PersistentManager = {
                         injectAssets: async (promptText, logCallback) => {
                             const assets = JSON.parse(localStorage.getItem("flow_persistent_assets_v3") || "[]");
@@ -194,7 +180,6 @@ io.on('connection', (socket) => {
                         }
                     };
 
-                    // 3. processPrompts
                     window.processPrompts = async () => {
                         window.log("Iniciando processo de automação...", "success"); 
                         window.state.isRunning = true; 
@@ -210,7 +195,7 @@ io.on('connection', (socket) => {
                         for (let i = window.state.currentIndex; i < window.state.prompts.length; i++) {
                             if (window.state.stopRequested) break;
                             const currentPrompt = window.state.prompts[i]; 
-                            console.log(`PROMPT_INDEX_UPDATE:${i + 1}`); // Envia para o servidor
+                            console.log(`PROMPT_INDEX_UPDATE:${i + 1}`);
 
                             let promptResolved = false; 
                             let attempts = 0; 
@@ -221,30 +206,46 @@ io.on('connection', (socket) => {
                                 window.state.initialUrls = new Set(getUIStatus().imgs);
                                 await window.PersistentManager.injectAssets(currentPrompt, window.log);
                                 
-                                const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
-                                const btn = [...document.querySelectorAll("button, i")].find(e => e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward"));
+                                // LOCAL DA CORREÇÃO: Seleção robusta e injeção de comando
+                                const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea#prompt-textarea");
+                                const btn = [...document.querySelectorAll("button")].find(e => e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward") || e.querySelector('i')?.textContent.includes("arrow_forward"));
                                 
-                                if (!inputEl || !btn) { 
-                                    window.log("Elementos de interface não encontrados. Aguardando...", "warning");
+                                if (!inputEl) { 
+                                    window.log("Campo de texto não encontrado. Aguardando...", "warning");
                                     await window.wait(2000); 
                                     continue; 
                                 }
                                 
-                                inputEl.focus(); 
+                                inputEl.focus();
+                                await window.wait(200);
                                 document.execCommand('selectAll', false, null); 
                                 document.execCommand('delete', false, null);
-                                await window.wait(300); 
-                                
-                                const dt = new DataTransfer(); 
-                                dt.setData('text/plain', currentPrompt);
-                                inputEl.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
-                                inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-                                
-                                window.log(`Enviando prompt [${i+1}] (Tentativa ${attempts})...`, "info"); 
-                                await window.wait(500); 
-                                btn.click();
+                                await window.wait(200);
 
-                                // Notificar servidor para tirar print do envio
+                                // Injeção via DataTransfer (Simula Paste real)
+                                const dataTransfer = new DataTransfer();
+                                dataTransfer.setData('text/plain', currentPrompt);
+                                inputEl.dispatchEvent(new ClipboardEvent('paste', {
+                                    clipboardData: dataTransfer,
+                                    bubbles: true,
+                                    cancelable: true
+                                }));
+                                
+                                // Fallback caso o paste falhe
+                                if (inputEl.innerText.trim() === "") {
+                                    document.execCommand('insertText', false, currentPrompt);
+                                }
+                                
+                                inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+                                await window.wait(500);
+
+                                if (!btn) {
+                                    window.log("Botão de envio não encontrado.", "error");
+                                    break;
+                                }
+
+                                window.log(`Enviando prompt [${i+1}] (T${attempts})...`, "info"); 
+                                btn.click();
                                 console.log("ACTION:SCREENSHOT_PROMPT");
 
                                 let startedProcessing = false;
@@ -270,24 +271,15 @@ io.on('connection', (socket) => {
                                     if (newImages.length >= 2) {
                                         window.log(`Sucesso: [${newImages.length}] imagens no prompt [${i+1}]`, "success");
                                         console.log(`IMAGES_CAPTURED:${i+1}:${JSON.stringify(newImages)}`);
-
                                         promptResolved = true; 
                                         window.state.currentIndex = i + 1; 
                                         break;
-                                    } else if (newImages.length === 1) {
-                                        window.log(`Apenas 1 imagem detectada. Reiniciando prompt [${i+1}]...`, "warning");
-                                        await window.wait(3000);
-                                        break; 
-                                    } else { 
+                                    } else {
                                         if (attempts < MAX_ATTEMPTS) {
-                                            window.log(`Aguardando renderização final do prompt [${i+1}]...`, "warning");
-                                            await window.wait(5000);
-                                            const recheck = getUIStatus();
-                                            const reImages = recheck.imgs.filter(url => !window.state.initialUrls.has(url));
-                                            if(reImages.length >= 2) continue;
-                                            window.log(`Nenhuma imagem detectada após carregamento (T${attempts}). Reiniciando...`, "reinject"); 
+                                            window.log(`Falha na detecção das imagens (T${attempts}). Tentando novamente...`, "warning");
+                                            await window.wait(2000);
                                         } else {
-                                            window.log(`Falha definitiva no prompt [${i+1}] após ${MAX_ATTEMPTS} tentativas.`, "error");
+                                            window.log(`Falha definitiva no prompt [${i+1}].`, "error");
                                             window.state.currentIndex = i + 1;
                                             promptResolved = true;
                                         }
@@ -303,20 +295,17 @@ io.on('connection', (socket) => {
                         window.state.isRunning = false;
                     };
 
-                    // Inicia o processo
                     window.processPrompts();
-
                 }, prompts);
 
-                // Capturar logs e eventos do navegador remoto
                 page.on('console', async (msg) => {
                     const text = msg.text();
                     if (text.startsWith('AUTO_LOG:')) {
-                        const [_, type, message] = text.split(':');
-                        socket.emit('log', message);
+                        const parts = text.split(':');
+                        socket.emit('log', parts.slice(2).join(':'));
                     }
                     if (text === 'ACTION:SCREENSHOT_PROMPT') {
-                        await delay(1000);
+                        await delay(1500);
                         const shot = await page.screenshot({ encoding: 'base64' });
                         socket.emit('screenshot-update', { img: `data:image/png;base64,${shot}`, title: "GERANDO IMAGENS..." });
                     }
@@ -333,10 +322,6 @@ io.on('connection', (socket) => {
             socket.emit('log', `❌ Erro Crítico: ${error.message}`);
             if (browser) await browser.close();
         }
-    });
-
-    socket.on('confirm-start', () => {
-        // Apenas um gatilho para o servidor
     });
 
     socket.on('stop-automation', async () => {
