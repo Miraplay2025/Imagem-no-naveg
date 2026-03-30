@@ -81,12 +81,11 @@ io.on('connection', (socket) => {
                             if (!page) throw new Error("Página perdida");
                             await page.bringToFront();
 
+                            // Mapeia o que já existe para não capturar imagens antigas
                             const existingImages = await page.evaluate(() => {
                                 return [...document.querySelectorAll('img[alt="Imagem gerada"]')].map(img => img.src);
                             });
 
-                            // --- CORREÇÃO DO PROTOCOL ERROR ---
-                            // Garante que o seletor existe antes de rodar o evaluate
                             await page.waitForSelector('div[role="textbox"], textarea', { timeout: 15000 });
 
                             const sendResult = await page.evaluate(async (text) => {
@@ -94,8 +93,7 @@ io.on('connection', (socket) => {
                                     const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
                                     const btn = [...document.querySelectorAll("button, i, span")].find(e => 
                                         e.innerText?.includes("arrow_forward") || 
-                                        e.textContent?.includes("arrow_forward") ||
-                                        e.classList.contains('kAxcVK') // Algumas versões usam a classe do loader no botão
+                                        e.textContent?.includes("arrow_forward")
                                     );
                                     
                                     if (!inputEl || !btn) return { status: 'error', msg: "Elementos de interface não encontrados" };
@@ -121,29 +119,37 @@ io.on('connection', (socket) => {
 
                             if (sendResult.status === 'error') throw new Error(sendResult.msg);
 
-                            socket.emit('log', `⏳ Aguardando o Flow iniciar a geração...`);
+                            socket.emit('log', `⏳ Enviado. Aguardando aparecer o processamento...`);
 
-                            // Aguarda o seletor de processamento (o círculo de 3% que aparece na sua imagem)
-                            await page.waitForSelector('.kAxcVK', { timeout: 45000 }).catch(() => {
-                                console.log("Aviso: Loader kAxcVK não detectado, mas continuando...");
-                            });
+                            // 1. ESPERA O CARREGADOR APARECER (kAxcVK)
+                            try {
+                                await page.waitForSelector('.kAxcVK', { timeout: 20000 });
+                                socket.emit('log', `⚙️ Geração do prompt ${i+1} detectada (Iniciando...)`);
+                            } catch (e) {
+                                socket.emit('log', `⚠️ Loader não visível, mas aguardando imagens...`);
+                            }
                             
-                            const startGenSnap = await page.screenshot({ encoding: 'base64' });
+                            // PRINT DO ESTADO DE GERAÇÃO (Aquele que você viu com 3%)
+                            const genSnap = await page.screenshot({ encoding: 'base64' });
                             socket.emit('screenshot-update', {
-                                img: `data:image/png;base64,${startGenSnap}`,
-                                title: `PROCESSANDO PROMPT ${i+1}`
+                                img: `data:image/png;base64,${genSnap}`,
+                                title: `GERANDO IMAGENS: PROMPT ${i+1}`
                             });
 
-                            // Espera o processamento terminar (quando o seletor some)
-                            await page.waitForFunction(() => !document.querySelector('.kAxcVK'), { timeout: 180000 });
+                            // 2. ESPERA O CARREGADOR SUMIR (Fim da geração)
+                            await page.waitForFunction(() => !document.querySelector('.kAxcVK'), { timeout: 240000 });
                             
-                            socket.emit('log', "processamento sumir, aguardado alguns segundos...");
-                            await delay(10000); // Aumentado para 10s para garantir renderização final
+                            socket.emit('log', "✅ Processamento visual sumiu. Aguardando 12s para renderização final...");
+                            await delay(12000); // Aumentado para garantir que a imagem carregue após o 99%
 
-                            const newImages = await page.evaluate((oldImgs) => {
+                            // 3. CAPTURA DAS NOVAS IMAGENS COM FILTRO DE SEGURANÇA
+                            const newImages = await page.evaluate(async (oldImgs) => {
                                 const allImgs = [...document.querySelectorAll('img[alt="Imagem gerada"]')];
-                                const news = allImgs.filter(img => !oldImgs.includes(img.src));
+                                // Filtra apenas as que não estavam lá antes e que tenham um SRC válido (não vazio ou data:vazio)
+                                const news = allImgs.filter(img => !oldImgs.includes(img.src) && img.src.length > 50);
                                 
+                                if (news.length === 0) return [];
+
                                 return Promise.all(news.map(async (img) => {
                                     try {
                                         const resp = await fetch(img.src);
@@ -161,10 +167,10 @@ io.on('connection', (socket) => {
 
                             if (validImages.length > 0) {
                                 socket.emit('new-images', { index: i + 1, urls: validImages });
-                                socket.emit('log', `✅ sucesso ${validImages.length} de imagens capturadas de prompt ${i+1}`);
+                                socket.emit('log', `✨ Sucesso! ${validImages.length} imagens capturadas do prompt ${i+1}`);
                                 success = true;
                             } else {
-                                throw new Error(`nenhuma imagem encontrada no prompt ${i+1}`);
+                                throw new Error(`Imagens não renderizadas a tempo no prompt ${i+1}`);
                             }
 
                         } catch (err) {
@@ -178,28 +184,29 @@ io.on('connection', (socket) => {
 
                             socket.emit('log', `❌ Erro no prompt ${i+1}: ${err.message}`, "error");
                             if (attempts < 3) {
-                                socket.emit('log', `reiviado o prompt ${i+1}...`);
+                                socket.emit('log', `🔄 Reiniciando tentativa ${attempts + 1} para o prompt ${i+1}...`);
                                 await page.reload({ waitUntil: 'networkidle2' }).catch(() => {});
                                 await delay(5000);
                             } else {
-                                socket.emit('log', `🚫 erro definitive ao gerar imagens de prompt ${i+1} proseguindo pra o proximo prompt ${i+2}`);
+                                socket.emit('log', `🚫 Falha definitiva no prompt ${i+1}. Pulando...`);
+                                success = true; // Força saída do loop de tentativas para não travar a lista
                             }
                         }
                     }
                 }
-                socket.emit('log', "🏁 Automação finalizada!");
+                socket.emit('log', "🏁 Automação de toda a lista finalizada!");
             });
 
         } catch (error) {
             console.error(error);
-            socket.emit('log', "❌ ERRO CRÍTICO: " + error.message, "error");
+            socket.emit('log', "❌ ERRO CRÍTICO NO SISTEMA: " + error.message, "error");
             if (browser) await browser.close().catch(() => {});
         }
     });
 
     socket.on('stop-automation', async () => {
         if (browser) await browser.close().catch(() => {});
-        socket.emit('log', "🛑 Operação parada.");
+        socket.emit('log', "🛑 Automação parada manualmente.");
     });
 
     socket.on('disconnect', async () => {
