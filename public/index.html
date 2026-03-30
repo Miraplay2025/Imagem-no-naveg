@@ -1,210 +1,221 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const puppeteer = require('puppeteer');
-const path = require('path');
-
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
-
-app.use(express.static('public'));
-
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-io.on('connection', (socket) => {
-    console.log('Cliente conectado');
-    let browser = null;
-    let page = null;
-
-    socket.on('start-automation', async (data) => {
-        const { link, prompts, cookiesBase64 } = data;
-
-        try {
-            socket.emit('log', "🚀 Iniciando Puppeteer no Render...");
-
-            if (browser) await browser.close().catch(() => {});
-
-            browser = await puppeteer.launch({
-                headless: "new",
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--disable-web-security',
-                    '--window-size=1280,800'
-                ]
-            });
-
-            page = await browser.newPage();
-            await page.setViewport({ width: 1280, height: 800 });
-
-            socket.emit('log', "🔑 Aplicando cookies de autenticação...");
-            const cookiesRaw = Buffer.from(cookiesBase64, 'base64').toString('utf-8');
-            const cookies = JSON.parse(cookiesRaw);
-            await page.setCookie(...cookies);
-
-            socket.emit('log', `🌐 Acessando: ${link}`);
-            
-            try {
-                await page.goto(link, { waitUntil: 'networkidle2', timeout: 70000 });
-            } catch (navError) {
-                socket.emit('log', "⚠️ Aviso: Carregamento parcial, tentando prosseguir...");
-            }
-
-            await delay(5000);
-
-            const screenshot = await page.screenshot({ encoding: 'base64' });
-            socket.emit('screenshot-update', {
-                img: `data:image/png;base64,${screenshot}`,
-                title: "VERIFICAÇÃO DE LOGIN"
-            });
-            
-            socket.emit('automation-status', { showConfirm: true });
-            socket.emit('log', "👀 Aguardando confirmação visual do usuário...");
-
-            // Removido o socket.once de dentro para evitar empilhamento de listeners
-            socket.removeAllListeners('confirm-start'); 
-            socket.once('confirm-start', async () => {
-                socket.emit('log', "✅ Confirmação recebida! Iniciando automação...");
-                
-                for (let i = 0; i < prompts.length; i++) {
-                    const currentPrompt = prompts[i];
-                    let attempts = 0;
-                    let success = false;
-
-                    while (attempts < 3 && !success) {
-                        attempts++;
-                        socket.emit('log', `📝 Processando Prompt ${i + 1}/${prompts.length} (Tentativa ${attempts})`);
-
-                        try {
-                            if (!page) throw new Error("Página perdida");
-                            await page.bringToFront();
-
-                            const existingImages = await page.evaluate(() => {
-                                return [...document.querySelectorAll('img[alt="Imagem gerada"]')].map(img => img.src);
-                            });
-
-                            // Injeção de texto com foco forçado
-                            await page.evaluate((text) => {
-                                const inputEl = document.querySelector('div[role="textbox"]') || document.querySelector('textarea');
-                                if (!inputEl) throw new Error("Campo de texto não encontrado");
-
-                                inputEl.click();
-                                inputEl.focus();
-                                document.execCommand('selectAll', false, null);
-                                document.execCommand('delete', false, null);
-
-                                const dt = new DataTransfer();
-                                dt.setData('text/plain', text);
-                                const pasteEvent = new ClipboardEvent('paste', {
-                                    clipboardData: dt, bubbles: true, cancelable: true
-                                });
-                                inputEl.dispatchEvent(pasteEvent);
-                                inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-                            }, currentPrompt);
-
-                            await delay(1500);
-
-                            const clicked = await page.evaluate(() => {
-                                const btn = [...document.querySelectorAll("button, i, span")].find(e => 
-                                    e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward")
-                                );
-                                if (btn) { 
-                                    btn.click(); 
-                                    return true; 
-                                }
-                                return false;
-                            });
-
-                            if (!clicked) throw new Error("Botão de envio não encontrado");
-
-                            socket.emit('log', `⏳ Aguardando o Flow iniciar a geração...`);
-
-                            // AGUARDAR CARREGAMENTO APARECER (Aumentado tempo para 45s)
-                            await page.waitForSelector('.kAxcVK', { timeout: 45000 });
-                            
-                            // PRINT DE INÍCIO DE PROCESSAMENTO
-                            const startGenSnap = await page.screenshot({ encoding: 'base64' });
-                            socket.emit('screenshot-update', {
-                                img: `data:image/png;base64,${startGenSnap}`,
-                                title: `PROCESSANDO PROMPT ${i+1}`
-                            });
-                            socket.emit('log', `carregamento de imagem de prompt ${i+1} iniciado`);
-
-                            // AGUARDAR CARREGAMENTO SUMIR
-                            await page.waitForFunction(() => !document.querySelector('.kAxcVK'), { timeout: 180000 });
-                            
-                            socket.emit('log', "processamento sumir, aguardado alguns segundos...");
-                            await delay(8000);
-
-                            const newImages = await page.evaluate((oldImgs) => {
-                                const allImgs = [...document.querySelectorAll('img[alt="Imagem gerada"]')];
-                                const news = allImgs.filter(img => !oldImgs.includes(img.src));
-                                
-                                return Promise.all(news.map(async (img) => {
-                                    try {
-                                        const resp = await fetch(img.src);
-                                        const blob = await resp.blob();
-                                        return new Promise(r => {
-                                            const reader = new FileReader();
-                                            reader.onloadend = () => r(reader.result);
-                                            reader.readAsDataURL(blob);
-                                        });
-                                    } catch (err) { return null; }
-                                }));
-                            }, existingImages);
-
-                            const validImages = newImages.filter(img => img !== null);
-
-                            if (validImages.length > 0) {
-                                socket.emit('new-images', { index: i + 1, urls: validImages });
-                                socket.emit('log', `✅ sucesso ${validImages.length} de imagens capturadas de prompt ${i+1}`);
-                                success = true;
-                            } else {
-                                throw new Error(`nenhuma imagem encontrada no prompt ${i+1}`);
-                            }
-
-                        } catch (err) {
-                            const errorSnap = await page.screenshot({ encoding: 'base64' }).catch(() => null);
-                            if(errorSnap) {
-                                socket.emit('screenshot-update', {
-                                    img: `data:image/png;base64,${errorSnap}`,
-                                    title: `ERRO NO PROMPT ${i+1}`
-                                });
-                            }
-
-                            socket.emit('log', `❌ Erro no prompt ${i+1}: ${err.message}`, "error");
-                            if (attempts < 3) {
-                                socket.emit('log', `reiviado o prompt ${i+1}...`);
-                                await page.reload({ waitUntil: 'networkidle2' }).catch(() => {});
-                                await delay(5000);
-                            } else {
-                                socket.emit('log', `🚫 erro definitive ao gerar imagens de prompt ${i+1} proseguindo pra o proximo prompt ${i+2}`);
-                            }
-                        }
-                    }
-                }
-                socket.emit('log', "🏁 Automação finalizada!");
-            });
-
-        } catch (error) {
-            console.error(error);
-            socket.emit('log', "❌ ERRO CRÍTICO: " + error.message, "error");
-            if (browser) await browser.close().catch(() => {});
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto Flow Ultra Pro | Automation Control</title>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: #020617; color: #e2e8f0; font-family: 'Inter', sans-serif; }
+        .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; transition: all 0.3s; }
+        .mobile-field:focus { border-color: #3b82f6; box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2); }
+        
+        .log-box { 
+            font-size: 11px; 
+            height: 250px; 
+            overflow-y: auto; 
+            background: #000; 
+            padding: 12px; 
+            border-radius: 12px; 
+            border: 1px solid #334155;
+            font-family: 'Fira Code', monospace;
+            display: flex;
+            flex-direction: column;
         }
-    });
+        .log-entry { margin-bottom: 4px; border-left: 3px solid #475569; padding-left: 8px; animation: slideIn 0.2s ease; flex-shrink: 0; }
+        @keyframes slideIn { from { opacity:0; transform: translateX(-5px); } to { opacity:1; transform: translateX(0); } }
+        .log-success { border-color: #10b981; color: #34d399; }
+        .log-error { border-color: #ef4444; color: #f87171; background: rgba(239, 68, 68, 0.1); }
+        .log-warning { border-color: #f59e0b; color: #fbbf24; }
+        .log-info { border-color: #3b82f6; color: #60a5fa; }
 
-    socket.on('stop-automation', async () => {
-        if (browser) await browser.close().catch(() => {});
-        socket.emit('log', "🛑 Operação parada.");
-    });
+        .screenshot-box { 
+            border: 2px solid #3b82f6; 
+            border-radius: 16px; 
+            overflow: hidden; 
+            background: #000;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+        }
+        
+        .btn-main { transition: all 0.2s; }
+        .btn-main:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-main:active:not(:disabled) { transform: scale(0.98); }
 
-    socket.on('disconnect', async () => {
-        if (browser) await browser.close().catch(() => {});
-    });
-});
+        .pending { border: 1px dashed #ef4444 !important; }
+        .loaded { border: 1px solid #10b981 !important; background: rgba(16, 185, 129, 0.05) !important; }
+    </style>
+</head>
+<body class="p-4 flex flex-col items-center pb-20">
+    <div class="w-full max-w-md space-y-5">
+        <header class="text-center space-y-1">
+            <h1 class="text-2xl font-black tracking-tighter text-blue-500 italic">AUTO FLOW PRO</h1>
+            <p class="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Remote Browser Controller</p>
+        </header>
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server ON na porta ${PORT}`));
+        <div id="robot-view" class="hidden space-y-2">
+            <div class="flex justify-between items-center px-1">
+                <h2 id="view-title" class="text-[10px] font-bold text-blue-400 uppercase tracking-tighter">Live Browser View</h2>
+                <span class="flex h-2 w-2 rounded-full bg-red-500 animate-pulse"></span>
+            </div>
+            <div class="screenshot-box">
+                <img id="screen-img" class="w-full bg-slate-900" src="" alt="Browser View">
+            </div>
+        </div>
+
+        <input id="flow-url" type="text" placeholder="Link do Projeto Flow" class="w-full p-4 mobile-field outline-none text-sm font-medium">
+        
+        <div class="grid grid-cols-1">
+            <label id="label-cookies" class="block p-4 text-center mobile-field cursor-pointer text-[10px] bg-slate-900/50 border-dashed border-2 border-slate-700 pending">
+                <span class="block text-lg mb-1">🔑</span> CARREGAR COOKIES (JSON)
+                <input type="file" id="cookies-file" class="hidden" accept=".json">
+                <div id="cookie-info" class="hidden mt-1 text-green-400 font-bold uppercase">✓ Cookies Prontos</div>
+            </label>
+        </div>
+
+        <div class="relative">
+            <textarea id="prompt-input" class="w-full p-4 mobile-field h-44 outline-none text-sm resize-none" placeholder="Digite seus prompts aqui..."></textarea>
+            <div class="absolute bottom-2 right-2 text-[9px] text-slate-500 font-mono" id="prompt-stats">0 Prompts</div>
+        </div>
+        
+        <button id="btn-start" class="btn-main w-full p-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black text-lg shadow-lg shadow-blue-900/20">INICIAR ROBÔ</button>
+        <button id="btn-stop" class="hidden btn-main w-full p-4 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-black text-lg">PARAR OPERAÇÃO</button>
+
+        <div id="confirm-box" class="hidden p-5 bg-blue-950/40 border-2 border-blue-500/50 rounded-2xl text-center space-y-4 backdrop-blur-sm">
+            <div class="space-y-1">
+                <p class="text-blue-400 font-black text-sm uppercase">Página Carregada</p>
+                <p class="text-[11px] text-slate-300 italic">Verifique o print acima. Se o Flow carregou corretamente e você está logado, confirme abaixo.</p>
+            </div>
+            <button id="btn-confirm" class="w-full p-4 bg-blue-500 hover:bg-blue-400 text-white font-black rounded-xl shadow-lg">CONFIRMAR E INJETAR</button>
+        </div>
+
+        <div class="space-y-2">
+            <p class="text-[10px] font-bold text-slate-500 uppercase px-1">Monitor do Sistema</p>
+            <div id="logs" class="log-box"></div>
+        </div>
+
+        <div id="results" class="space-y-4 pt-4"></div>
+    </div>
+
+    <script>
+        const socket = io();
+        let cookiesBase64 = null;
+        const state = { prompts: [] };
+
+        // Manipulação de Cookies
+        document.getElementById('cookies-file').onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                try {
+                    const cleanJson = ev.target.result.trim();
+                    JSON.parse(cleanJson);
+                    cookiesBase64 = btoa(unescape(encodeURIComponent(cleanJson)));
+                    document.getElementById('cookie-info').classList.remove('hidden');
+                    document.getElementById('label-cookies').classList.replace('pending', 'loaded');
+                    addLog("🔑 Cookies validados com sucesso.", "success");
+                } catch(err) {
+                    addLog("❌ Erro ao ler JSON de cookies.", "error");
+                }
+            };
+            reader.readAsText(file);
+        };
+
+        // Identificação de Prompts
+        document.getElementById('prompt-input').oninput = (e) => {
+            const val = e.target.value.trim();
+            if (val.toLowerCase().includes("prompt")) {
+                const raw = val.split(/\bPrompt\b/i).slice(1);
+                state.prompts = raw.map(t => t.replace(/^[\s\d:.-]+/, "").trim()).filter(Boolean);
+            } else {
+                state.prompts = val.split('\n').map(l => l.trim()).filter(Boolean);
+            }
+            document.getElementById('prompt-stats').textContent = `${state.prompts.length} Prompts Identificados`;
+        };
+
+        // Iniciar Automação
+        document.getElementById('btn-start').onclick = () => {
+            const url = document.getElementById('flow-url').value;
+            if (!url || !cookiesBase64 || state.prompts.length === 0) {
+                addLog("⚠️ Preencha todos os campos e cookies!", "warning");
+                return;
+            }
+            socket.emit('start-automation', {
+                link: url, 
+                prompts: state.prompts,
+                cookiesBase64: cookiesBase64
+            });
+            document.getElementById('btn-start').classList.add('hidden');
+            document.getElementById('btn-stop').classList.remove('hidden');
+        };
+
+        // Confirmar Injeção
+        document.getElementById('btn-confirm').onclick = () => {
+            socket.emit('confirm-start');
+            document.getElementById('confirm-box').classList.add('hidden');
+        };
+
+        // Atualizar Visualização do Robô (Prints)
+        socket.on('screenshot-update', (data) => {
+            document.getElementById('robot-view').classList.remove('hidden');
+            document.getElementById('screen-img').src = data.img;
+            document.getElementById('view-title').textContent = data.title;
+            // Scroll suave para o print se for um erro ou início
+            if(data.title.includes("ERRO") || data.title.includes("PROCESSANDO")) {
+                document.getElementById('robot-view').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        });
+
+        // Mostrar Botão de Confirmação
+        socket.on('automation-status', (data) => {
+            if (data.showConfirm) document.getElementById('confirm-box').classList.remove('hidden');
+        });
+
+        // Gerenciador de Logs
+        socket.on('log', (msg) => {
+            let type = "info";
+            if (msg.includes("❌") || msg.toLowerCase().includes("erro") || msg.includes("🚫")) type = "error";
+            if (msg.includes("✅") || msg.includes("🏁")) type = "success";
+            if (msg.includes("⚠️") || msg.includes("⏳")) type = "warning";
+            addLog(msg, type);
+        });
+
+        function addLog(msg, type) {
+            const logBox = document.getElementById('logs');
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${type}`;
+            const time = new Date().toLocaleTimeString('pt-BR', { hour12: false });
+            entry.innerHTML = `<span class="opacity-40 text-[9px] mr-2">${time}</span> ${msg}`;
+            logBox.appendChild(entry);
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        // Exibir Novas Imagens Geradas
+        socket.on('new-images', (data) => {
+            const div = document.createElement('div');
+            div.className = "bg-slate-900/80 p-3 rounded-2xl border border-slate-800 space-y-2 animate-pulse";
+            div.innerHTML = `
+                <div class="flex justify-between items-center text-[10px] px-1">
+                    <span class="text-blue-400 font-bold uppercase">Resultado Prompt #${data.index}</span>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    ${data.urls.map(u => `<img src="${u}" class="rounded-xl border border-slate-700 shadow-md">`).join('')}
+                </div>
+            `;
+            document.getElementById('results').prepend(div);
+            setTimeout(() => div.classList.remove('animate-pulse'), 2000);
+        });
+
+        // Parar Robô
+        document.getElementById('btn-stop').onclick = () => { 
+            socket.emit('stop-automation'); 
+            document.getElementById('btn-stop').classList.add('hidden');
+            document.getElementById('btn-start').classList.remove('hidden');
+            document.getElementById('robot-view').classList.add('hidden');
+            document.getElementById('confirm-box').classList.add('hidden');
+            addLog("🛑 Operação interrompida pelo usuário.", "warning");
+        };
+    </script>
+</body>
+</html>
