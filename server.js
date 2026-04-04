@@ -20,14 +20,14 @@ io.on('connection', (socket) => {
     let page = null;
     let screenshotInterval = null;
 
-    // Função para limpar processos antigos antes de começar
-    const cleanUp = async () => {
+    // Função para encerrar processos com segurança
+    const closeEverything = async () => {
         if (screenshotInterval) clearInterval(screenshotInterval);
         if (browser) {
             try {
                 await browser.close();
             } catch (e) {
-                console.log("Erro ao fechar browser antigo:", e.message);
+                console.log("Erro ao fechar browser:", e.message);
             }
         }
         browser = null;
@@ -38,134 +38,135 @@ io.on('connection', (socket) => {
         const { link, prompts, cookiesBase64 } = data;
 
         try {
-            await cleanUp();
-            socket.emit('log', "🚀 Iniciando Puppeteer...");
+            socket.emit('log', "🚀 Iniciando Puppeteer no Render...");
 
+            // Fecha qualquer instância anterior para não vazar memória
+            if (browser) await browser.close().catch(() => {});
+
+            // Lógica de abertura 100% garantida
             browser = await puppeteer.launch({
                 headless: "new",
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage', // Vital para evitar crash de memória
+                    '--disable-dev-shm-usage',
                     '--disable-gpu',
-                    '--no-zygote',
-                    '--single-process'
+                    '--disable-web-security',
+                    '--window-size=1280,800'
                 ]
             });
 
             page = await browser.newPage();
-            
-            // Impede que a página feche por timeout de script
-            page.setDefaultNavigationTimeout(90000); 
             await page.setViewport({ width: 1280, height: 800 });
 
-            socket.emit('log', "🔑 Injetando cookies...");
+            socket.emit('log', "🔑 Aplicando cookies de autenticação...");
             const cookiesRaw = Buffer.from(cookiesBase64, 'base64').toString('utf-8');
             const cookies = JSON.parse(cookiesRaw);
             await page.setCookie(...cookies);
 
-            socket.emit('log', `🌐 Navegando para o Flow...`);
+            socket.emit('log', `🌐 Acessando: ${link}`);
             
-            // Tenta acessar com retry simples
             try {
-                await page.goto(link, { waitUntil: 'networkidle2' });
-            } catch (err) {
-                socket.emit('log', "⚠️ Conexão instável, verificando estado da página...");
+                await page.goto(link, { waitUntil: 'networkidle2', timeout: 70000 });
+            } catch (navError) {
+                socket.emit('log', "⚠️ Aviso: Carregamento parcial, tentando prosseguir...");
             }
 
             await delay(5000);
-            
-            // Verifica se a página ainda está aberta antes do screenshot
-            if (!page || page.isClosed()) throw new Error("A página foi fechada inesperadamente.");
 
             const screenshot = await page.screenshot({ encoding: 'base64' });
             socket.emit('screenshot-update', {
                 img: `data:image/png;base64,${screenshot}`,
                 title: "VERIFICAÇÃO DE LOGIN"
             });
-
+            
             socket.emit('automation-status', { showConfirm: true });
+            socket.emit('log', "👀 Aguardando confirmação visual do usuário...");
 
-            socket.removeAllListeners('confirm-start');
+            socket.removeAllListeners('confirm-start'); 
             socket.once('confirm-start', async () => {
-                socket.emit('log', "✅ Confirmação recebida! Processando...");
+                socket.emit('log', "✅ Confirmação recebida! Iniciando automação...");
 
                 for (let i = 0; i < prompts.length; i++) {
-                    if (!page || page.isClosed()) break;
+                    // Verifica se o browser ainda está vivo antes de cada prompt
+                    if (!browser || !page) break;
 
                     const currentPrompt = prompts[i];
-                    socket.emit('log', `📝 Prompt ${i + 1}/${prompts.length}: Enviando...`);
+                    socket.emit('log', `📝 Injetando Prompt ${i + 1}/${prompts.length}...`);
 
                     const selector = 'div[role="textbox"][contenteditable="true"], textarea';
-                    await page.waitForSelector(selector, { timeout: 20000 });
+                    await page.waitForSelector(selector, { timeout: 30000 });
                     await page.click(selector);
                     
                     await page.evaluate((text) => {
-                        const inputEl = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
-                        inputEl.focus();
+                        const el = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
+                        el.focus();
                         document.execCommand('selectAll', false, null);
                         document.execCommand('delete', false, null);
                         const dt = new DataTransfer();
                         dt.setData('text/plain', text);
-                        inputEl.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
+                        el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
                     }, currentPrompt);
 
-                    await delay(1000);
-                    
-                    // Clique no botão de envio
+                    await delay(800);
+
                     await page.evaluate(() => {
-                        const btn = [...document.querySelectorAll("button, i, span")].find(e =>
+                        const b = [...document.querySelectorAll("button, i, span")].find(e => 
                             e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward")
                         );
-                        if (btn) btn.click();
+                        if (b) b.click();
                     });
 
-                    // Loop de monitoramento de 5s
-                    const monitor = () => new Promise((resolve) => {
-                        screenshotInterval = setInterval(async () => {
-                            if (!page || page.isClosed()) {
+                    socket.emit('log', `⏳ Aguardando geração do Prompt #${i+1}...`);
+
+                    const monitorGeneration = async () => {
+                        return new Promise((resolve) => {
+                            screenshotInterval = setInterval(async () => {
+                                try {
+                                    if (page) {
+                                        const screen = await page.screenshot({ encoding: 'base64' });
+                                        socket.emit('screenshot-update', { 
+                                            img: `data:image/png;base64,${screen}`, 
+                                            title: `PROCESSANDO PROMPT #${i+1}` 
+                                        });
+                                        socket.emit('waiting-user-validation');
+                                    }
+                                } catch (e) { clearInterval(screenshotInterval); }
+                            }, 5000);
+
+                            socket.once('next-prompt', () => {
                                 clearInterval(screenshotInterval);
-                                return resolve();
-                            }
-                            try {
-                                const screen = await page.screenshot({ encoding: 'base64' });
-                                socket.emit('screenshot-update', {
-                                    img: `data:image/png;base64,${screen}`,
-                                    title: `MONITORANDO PROMPT #${i+1}`
-                                });
-                                socket.emit('waiting-user-validation');
-                            } catch (e) { clearInterval(screenshotInterval); resolve(); }
-                        }, 5000);
-
-                        socket.once('next-prompt', () => {
-                            clearInterval(screenshotInterval);
-                            resolve();
+                                resolve();
+                            });
                         });
-                    });
+                    };
 
-                    await monitor();
+                    await monitorGeneration();
+                    socket.emit('log', `✔️ Prompt ${i+1} concluído.`);
                 }
+
                 socket.emit('log', "🏁 Automação finalizada!");
                 socket.emit('automation-finished');
             });
 
         } catch (error) {
-            console.error(error);
             socket.emit('log', `❌ Erro Fatal: ${error.message}`);
-            await cleanUp();
+            console.error("ERRO NO SERVER:", error);
+            await closeEverything();
         }
     });
 
+    // Lógica do botão Encerrar (sem recarregar página)
     socket.on('stop-automation', async () => {
-        await cleanUp();
-        socket.emit('log', "🛑 Automação parada e browser fechado.");
+        await closeEverything();
+        socket.emit('log', "🛑 Robô parado com sucesso!");
         socket.emit('automation-stopped-confirmed');
     });
 
     socket.on('disconnect', () => {
         console.log('Cliente desconectado');
-        // Opcional: cleanUp(); // Fecha o browser se o usuário fechar a aba do navegador
     });
 });
 
-server.listen(3000, () => console.log('Servidor rodando em http://localhost:3000'));
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`🚀 Server rodando em http://localhost:${PORT}`));
