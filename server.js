@@ -9,56 +9,51 @@ const io = new Server(server);
 
 app.use(express.static('public'));
 
+let browser = null;
+let screenshotInterval = null;
+
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 io.on('connection', (socket) => {
     console.log('Cliente conectado');
-    socket.emit('log', "🔌 Socket conectado com sucesso!");
-
-    let browser = null;
-    let page = null;
-    let screenshotInterval = null;
+    socket.emit('log', "🔌 Conectado ao Servidor.");
 
     socket.on('start-automation', async (data) => {
         const { link, prompts, cookiesBase64 } = data;
 
         try {
             socket.emit('log', "🚀 Iniciando Puppeteer...");
-
+            
             browser = await puppeteer.launch({
                 headless: "new",
                 args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
             });
 
-            page = await browser.newPage();
+            const page = await browser.newPage();
             await page.setViewport({ width: 1280, height: 800 });
 
-            // Aplicar Cookies
             const cookies = JSON.parse(Buffer.from(cookiesBase64, 'base64').toString());
             await page.setCookie(...cookies);
 
-            socket.emit('log', `🌐 Acessando Flow...`);
+            socket.emit('log', `🌐 Acessando: ${link}`);
             await page.goto(link, { waitUntil: 'networkidle2', timeout: 60000 });
             
-            // Print inicial para confirmação
             const screen = await page.screenshot({ encoding: 'base64' });
             socket.emit('screenshot-update', { img: `data:image/png;base64,${screen}`, title: "VERIFICAÇÃO DE LOGIN" });
             socket.emit('automation-status', { showConfirm: true });
 
-            // Aguarda o usuário confirmar o início real
             socket.once('confirm-start', async () => {
-                socket.emit('log', "✅ Iniciando processamento da lista...");
+                socket.emit('log', "✅ Processando prompts...");
 
                 for (let i = 0; i < prompts.length; i++) {
-                    const currentPrompt = prompts[i];
-                    socket.emit('log', `📝 Injetando Prompt ${i + 1}/${prompts.length}...`);
+                    if (!browser) break; // Interrompe se o browser foi fechado
 
-                    // 1. Localizar e Clicar no Input
+                    const currentPrompt = prompts[i];
+                    socket.emit('log', `📝 Enviando Prompt ${i + 1}/${prompts.length}`);
+
                     const selector = 'div[role="textbox"][contenteditable="true"], textarea';
                     await page.waitForSelector(selector);
-                    await page.click(selector);
                     
-                    // 2. Injetar texto via DataTransfer (Evita detecção)
                     await page.evaluate((text) => {
                         const el = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
                         el.focus();
@@ -70,8 +65,6 @@ io.on('connection', (socket) => {
                     }, currentPrompt);
 
                     await delay(800);
-
-                    // 3. Clicar no botão de enviar
                     await page.evaluate(() => {
                         const b = [...document.querySelectorAll("button, i, span")].find(e => 
                             e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward")
@@ -79,36 +72,22 @@ io.on('connection', (socket) => {
                         if (b) b.click();
                     });
 
-                    socket.emit('log', `⏳ Aguardando geração... (Monitorando a cada 5s)`);
+                    // Loop de Prints a cada 5 segundos
+                    await new Promise((resolve) => {
+                        screenshotInterval = setInterval(async () => {
+                            if (!browser) return clearInterval(screenshotInterval);
+                            const screen = await page.screenshot({ encoding: 'base64' });
+                            socket.emit('screenshot-update', { img: `data:image/png;base64,${screen}`, title: `PROMPT #${i+1} EM ANDAMENTO` });
+                            socket.emit('waiting-user-validation');
+                        }, 5000);
 
-                    // 4. Loop de monitoramento (Prints a cada 5 segundos)
-                    const monitorGeneration = async () => {
-                        return new Promise((resolve) => {
-                            // Inicia o intervalo de prints
-                            screenshotInterval = setInterval(async () => {
-                                const screen = await page.screenshot({ encoding: 'base64' });
-                                socket.emit('screenshot-update', { 
-                                    img: `data:image/png;base64,${screen}`, 
-                                    title: `PROCESSANDO PROMPT #${i+1}` 
-                                });
-                                // Envia sinal para mostrar o botão de "Próximo" no HTML
-                                socket.emit('waiting-user-validation');
-                            }, 5000);
-
-                            // Escuta o clique do usuário no botão "Imagem Gerada"
-                            socket.once('next-prompt', () => {
-                                clearInterval(screenshotInterval);
-                                resolve();
-                            });
+                        socket.once('next-prompt', () => {
+                            clearInterval(screenshotInterval);
+                            resolve();
                         });
-                    };
-
-                    await monitorGeneration();
-                    socket.emit('log', `✔️ Prompt ${i+1} concluído.`);
+                    });
                 }
-
-                socket.emit('log', "🏁 Automação finalizada com sucesso!");
-                socket.emit('automation-finished');
+                socket.emit('log', "🏁 Automação concluída!");
             });
 
         } catch (error) {
@@ -116,11 +95,16 @@ io.on('connection', (socket) => {
         }
     });
 
+    // ENCERRAR SEM RECARREGAR
     socket.on('stop-automation', async () => {
         if (screenshotInterval) clearInterval(screenshotInterval);
-        if (browser) await browser.close();
-        socket.emit('log', "🛑 Robô parado.");
+        if (browser) {
+            await browser.close();
+            browser = null;
+        }
+        socket.emit('log', "🚫 AUTOMAÇÃO ENCERRADA PELO USUÁRIO.");
+        socket.emit('automation-stopped-confirm'); // Confirmação para o HTML
     });
 });
 
-server.listen(3000, () => console.log('Server rodando em http://localhost:3000'));
+server.listen(3000, () => console.log('http://localhost:3000'));
