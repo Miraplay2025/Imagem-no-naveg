@@ -9,51 +9,46 @@
     <style>
         body { background: #020617; color: #e2e8f0; font-family: 'Inter', sans-serif; }
         .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; }
-        .log-box { font-size: 11px; height: 200px; overflow-y: auto; background: #000; padding: 12px; border-radius: 12px; border: 1px solid #334155; }
+        .log-box { font-size: 11px; height: 180px; overflow-y: auto; background: #000; padding: 10px; border-radius: 12px; border: 1px solid #334155; }
         .log-entry { margin-bottom: 4px; border-left: 3px solid #475569; padding-left: 8px; }
-        .log-success { border-color: #10b981; color: #34d399; }
         .log-error { border-color: #ef4444; color: #f87171; }
         .screenshot-box { border: 2px solid #3b82f6; border-radius: 16px; overflow: hidden; background: #000; }
-        .btn-pulse { animation: pulse-blue 2s infinite; }
-        @keyframes pulse-blue { 0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(59, 130, 246, 0); } 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); } }
     </style>
 </head>
-<body class="p-4 flex flex-col items-center pb-20">
-    <div class="w-full max-w-md space-y-5">
+<body class="p-4 flex flex-col items-center">
+    <div class="w-full max-w-md space-y-4">
         <header class="text-center">
-            <h1 class="text-2xl font-black tracking-tighter text-blue-500 italic">AUTO FLOW PRO</h1>
+            <h1 class="text-2xl font-black text-blue-500 italic">AUTO FLOW PRO</h1>
         </header>
 
         <div id="robot-view" class="hidden space-y-2">
-            <div class="flex justify-between items-center">
-                <h2 id="view-title" class="text-[10px] font-bold text-blue-400 uppercase">Live Preview</h2>
-                <span id="live-indicator" class="flex h-2 w-2 rounded-full bg-red-500 animate-pulse"></span>
-            </div>
             <div class="screenshot-box">
                 <img id="screen-img" class="w-full" src="">
             </div>
-            
-            <button id="btn-next-prompt" class="hidden w-full p-4 bg-green-600 hover:bg-green-500 text-white rounded-xl font-black btn-pulse">
-                ✅ IMAGEM GERADA (IR PARA O PRÓXIMO)
+            <button id="btn-next-prompt" class="hidden w-full p-4 bg-green-600 text-white rounded-xl font-black shadow-lg">
+                ✅ IMAGEM GERADA (PRÓXIMO)
             </button>
         </div>
 
-        <input id="flow-url" type="text" placeholder="Link do Projeto Flow" class="w-full p-4 mobile-field outline-none text-sm">
-        
-        <label id="label-cookies" class="block p-4 text-center mobile-field border-dashed border-2 cursor-pointer text-[10px]">
-            <span>🔑 CARREGAR COOKIES (JSON)</span>
-            <input type="file" id="cookies-file" class="hidden" accept=".json">
-            <div id="cookie-info" class="hidden text-green-400 font-bold">✓ COOKIES OK</div>
-        </label>
+        <div id="setup-controls" class="space-y-4">
+            <input id="flow-url" type="text" placeholder="Link do Projeto Flow" class="w-full p-4 mobile-field outline-none text-sm">
+            
+            <label id="label-cookies" class="block p-4 text-center mobile-field border-dashed border-2 cursor-pointer text-[10px]">
+                <span id="cookie-status">🔑 CARREGAR COOKIES (JSON)</span>
+                <input type="file" id="cookies-file" class="hidden" accept=".json">
+            </label>
 
-        <textarea id="prompt-input" class="w-full p-4 mobile-field h-32 outline-none text-sm resize-none" placeholder="Digite os prompts..."></textarea>
-        
-        <button id="btn-start" class="w-full p-4 bg-blue-600 text-white rounded-2xl font-black">INICIAR ROBÔ</button>
-        <button id="btn-stop" class="hidden w-full p-4 bg-red-600 text-white rounded-2xl font-black">PARAR OPERAÇÃO</button>
+            <textarea id="prompt-input" class="w-full p-4 mobile-field h-24 outline-none text-sm resize-none" placeholder="Cole os prompts aqui..."></textarea>
+        </div>
 
-        <div id="confirm-box" class="hidden p-4 bg-blue-900/30 border border-blue-500 rounded-xl text-center space-y-3">
-            <p class="text-xs">O site carregou? Verifique o print acima.</p>
-            <button id="btn-confirm" class="w-full p-3 bg-blue-500 text-white font-bold rounded-lg">SIM, TUDO OK</button>
+        <div id="action-buttons" class="space-y-2">
+            <button id="btn-start" class="w-full p-4 bg-blue-600 text-white rounded-2xl font-black">INICIAR ROBÔ</button>
+            <button id="btn-stop" class="hidden w-full p-4 bg-red-600 text-white rounded-2xl font-black">PARAR OPERAÇÃO</button>
+        </div>
+
+        <div id="confirm-box" class="hidden p-4 bg-blue-900/30 border border-blue-500 rounded-xl text-center space-y-2">
+            <p class="text-xs">Confirme se o site carregou corretamente no print.</p>
+            <button id="btn-confirm" class="w-full p-3 bg-blue-500 text-white font-bold rounded-lg">CONFIRMAR</button>
         </div>
 
         <div class="log-box" id="logs"></div>
@@ -62,74 +57,81 @@
     <script>
         const socket = io();
         let cookiesBase64 = null;
-        let promptList = [];
 
-        // Lógica de Cookies
+        // Feedback de Conexão
+        socket.on('connect', () => addLog("🟢 Socket Conectado", "success"));
+
         document.getElementById('cookies-file').onchange = (e) => {
             const reader = new FileReader();
             reader.onload = (ev) => {
                 cookiesBase64 = btoa(ev.target.result);
-                document.getElementById('cookie-info').classList.remove('hidden');
+                document.getElementById('cookie-status').innerHTML = "✅ COOKIES CARREGADOS";
+                document.getElementById('label-cookies').style.borderColor = "#10b981";
             };
             reader.readAsText(e.target.files[0]);
         };
 
-        // Iniciar
         document.getElementById('btn-start').onclick = () => {
-            const val = document.getElementById('prompt-input').value;
-            promptList = val.split('\n').filter(l => l.trim() !== "");
-            
+            const prompts = document.getElementById('prompt-input').value.split('\n').filter(l => l.trim() !== "");
             socket.emit('start-automation', {
                 link: document.getElementById('flow-url').value,
-                prompts: promptList,
+                prompts: prompts,
                 cookiesBase64: cookiesBase64
             });
             document.getElementById('btn-start').classList.add('hidden');
             document.getElementById('btn-stop').classList.remove('hidden');
         };
 
-        // Confirmação de Login
+        // BOTAO ENCERRAR (SEM REFRESH)
+        document.getElementById('btn-stop').onclick = () => {
+            socket.emit('stop-automation');
+        };
+
+        // Resposta do server ao encerrar
+        socket.on('automation-stopped-confirm', () => {
+            document.getElementById('btn-stop').classList.add('hidden');
+            document.getElementById('btn-start').classList.remove('hidden');
+            document.getElementById('robot-view').classList.add('hidden');
+            document.getElementById('confirm-box').classList.add('hidden');
+            document.getElementById('btn-next-prompt').classList.add('hidden');
+            addLog("ℹ️ Interface resetada sem recarregar.", "info");
+        });
+
         document.getElementById('btn-confirm').onclick = () => {
             socket.emit('confirm-start');
             document.getElementById('confirm-box').classList.add('hidden');
         };
 
-        // Clique em "Imagem Gerada"
         document.getElementById('btn-next-prompt').onclick = () => {
             socket.emit('next-prompt');
             document.getElementById('btn-next-prompt').classList.add('hidden');
         };
 
-        // Sockets Events
-        socket.on('log', (msg) => {
-            const div = document.createElement('div');
-            div.className = `log-entry ${msg.includes('❌') ? 'log-error' : msg.includes('✅') ? 'log-success' : ''}`;
-            div.innerHTML = msg;
-            const logs = document.getElementById('logs');
-            logs.appendChild(div);
-            logs.scrollTop = logs.scrollHeight;
-        });
-
         socket.on('screenshot-update', (data) => {
             document.getElementById('robot-view').classList.remove('hidden');
             document.getElementById('screen-img').src = data.img;
-            document.getElementById('view-title').textContent = data.title;
-        });
-
-        socket.on('automation-status', (data) => {
-            if (data.showConfirm) document.getElementById('confirm-box').classList.remove('hidden');
         });
 
         socket.on('waiting-user-validation', () => {
             document.getElementById('btn-next-prompt').classList.remove('hidden');
         });
 
-        socket.on('automation-finished', () => {
-            document.getElementById('btn-stop').click();
-            alert("🎉 Todos os prompts foram processados!");
+        socket.on('automation-status', (data) => {
+            if (data.showConfirm) document.getElementById('confirm-box').classList.remove('hidden');
         });
 
-        document.getElementById('btn-stop').onclick = () => location.reload();
+        socket.on('log', (msg) => addLog(msg));
+
+        function addLog(msg) {
+            const div = document.createElement('div');
+            div.className = "log-entry";
+            if(msg.includes("❌") || msg.includes("🚫")) div.style.color = "#f87171";
+            if(msg.includes("✅")) div.style.color = "#34d399";
+            div.innerHTML = msg;
+            const logs = document.getElementById('logs');
+            logs.appendChild(div);
+            logs.scrollTop = logs.scrollHeight;
+        }
     </script>
 </body>
 </html>
