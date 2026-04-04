@@ -20,7 +20,6 @@ io.on('connection', (socket) => {
     let page = null;
     let screenshotInterval = null;
 
-    // Função para encerrar processos com segurança
     const closeEverything = async () => {
         if (screenshotInterval) clearInterval(screenshotInterval);
         if (browser) {
@@ -40,10 +39,9 @@ io.on('connection', (socket) => {
         try {
             socket.emit('log', "🚀 Iniciando Puppeteer no Render...");
 
-            // Fecha qualquer instância anterior para não vazar memória
             if (browser) await browser.close().catch(() => {});
 
-            // Lógica de abertura 100% garantida
+            // Lógica de abertura GARANTIDA + Modo Anti-Detecção
             browser = await puppeteer.launch({
                 headless: "new",
                 args: [
@@ -52,11 +50,19 @@ io.on('connection', (socket) => {
                     '--disable-dev-shm-usage',
                     '--disable-gpu',
                     '--disable-web-security',
-                    '--window-size=1280,800'
+                    '--window-size=1280,800',
+                    '--disable-blink-features=AutomationControlled', // Remove flag de robô
+                    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
                 ]
             });
 
             page = await browser.newPage();
+
+            // Script para mascarar o Puppeteer (Evita erros de geração de imagem)
+            await page.evaluateOnNewDocument(() => {
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            });
+
             await page.setViewport({ width: 1280, height: 800 });
 
             socket.emit('log', "🔑 Aplicando cookies de autenticação...");
@@ -88,7 +94,6 @@ io.on('connection', (socket) => {
                 socket.emit('log', "✅ Confirmação recebida! Iniciando automação...");
 
                 for (let i = 0; i < prompts.length; i++) {
-                    // Verifica se o browser ainda está vivo antes de cada prompt
                     if (!browser || !page) break;
 
                     const currentPrompt = prompts[i];
@@ -108,7 +113,7 @@ io.on('connection', (socket) => {
                         el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
                     }, currentPrompt);
 
-                    await delay(800);
+                    await delay(1200); // Delay levemente maior para segurança
 
                     await page.evaluate(() => {
                         const b = [...document.querySelectorAll("button, i, span")].find(e => 
@@ -123,7 +128,7 @@ io.on('connection', (socket) => {
                         return new Promise((resolve) => {
                             screenshotInterval = setInterval(async () => {
                                 try {
-                                    if (page) {
+                                    if (page && !page.isClosed()) {
                                         const screen = await page.screenshot({ encoding: 'base64' });
                                         socket.emit('screenshot-update', { 
                                             img: `data:image/png;base64,${screen}`, 
@@ -151,12 +156,10 @@ io.on('connection', (socket) => {
 
         } catch (error) {
             socket.emit('log', `❌ Erro Fatal: ${error.message}`);
-            console.error("ERRO NO SERVER:", error);
             await closeEverything();
         }
     });
 
-    // Lógica do botão Encerrar (sem recarregar página)
     socket.on('stop-automation', async () => {
         await closeEverything();
         socket.emit('log', "🛑 Robô parado com sucesso!");
