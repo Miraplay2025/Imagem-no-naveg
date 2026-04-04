@@ -8,130 +8,145 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body { background: #020617; color: #e2e8f0; font-family: 'Inter', sans-serif; }
-        .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; }
-        .log-box { font-size: 11px; height: 180px; overflow-y: auto; background: #000; padding: 10px; border-radius: 12px; border: 1px solid #334155; }
-        .log-entry { margin-bottom: 4px; border-left: 3px solid #475569; padding-left: 8px; }
+        .mobile-field { background: #0f172a; border: 1px solid #1e293b; border-radius: 12px; transition: all 0.3s; }
+        .log-box { font-size: 11px; height: 200px; overflow-y: auto; background: #000; padding: 12px; border-radius: 12px; border: 1px solid #334155; }
+        .log-entry { margin-bottom: 4px; border-left: 3px solid #475569; padding-left: 8px; animation: slideIn 0.2s ease; }
+        @keyframes slideIn { from { opacity:0; transform: translateX(-5px); } to { opacity:1; transform: translateX(0); } }
+        .log-success { border-color: #10b981; color: #34d399; }
         .log-error { border-color: #ef4444; color: #f87171; }
-        .screenshot-box { border: 2px solid #3b82f6; border-radius: 16px; overflow: hidden; background: #000; }
+        .screenshot-box { border: 2px solid #3b82f6; border-radius: 16px; overflow: hidden; background: #000; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4); }
+        .btn-pulse { animation: pulse-green 2s infinite; }
+        @keyframes pulse-green { 0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); } 70% { box-shadow: 0 0 0 10px rgba(34, 197, 94, 0); } 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); } }
     </style>
 </head>
-<body class="p-4 flex flex-col items-center">
-    <div class="w-full max-w-md space-y-4">
+<body class="p-4 flex flex-col items-center pb-20">
+    <div class="w-full max-w-md space-y-5">
         <header class="text-center">
-            <h1 class="text-2xl font-black text-blue-500 italic">AUTO FLOW PRO</h1>
+            <h1 class="text-2xl font-black tracking-tighter text-blue-500 italic">AUTO FLOW PRO</h1>
+            <p class="text-[10px] text-slate-500 uppercase font-bold">Remote Browser Controller</p>
         </header>
 
         <div id="robot-view" class="hidden space-y-2">
-            <div class="screenshot-box">
-                <img id="screen-img" class="w-full" src="">
+            <div class="flex justify-between items-center">
+                <h2 id="view-title" class="text-[10px] font-bold text-blue-400 uppercase">Live Preview</h2>
+                <span class="flex h-2 w-2 rounded-full bg-red-500 animate-pulse"></span>
             </div>
-            <button id="btn-next-prompt" class="hidden w-full p-4 bg-green-600 text-white rounded-xl font-black shadow-lg">
-                ✅ IMAGEM GERADA (PRÓXIMO)
+            <div class="screenshot-box">
+                <img id="screen-img" class="w-full bg-slate-900" src="">
+            </div>
+            <button id="btn-next-prompt" class="hidden w-full p-4 bg-green-600 hover:bg-green-500 text-white rounded-xl font-black btn-pulse shadow-lg">
+                ✅ IMAGEM GERADA (CONTINUAR)
             </button>
         </div>
 
-        <div id="setup-controls" class="space-y-4">
-            <input id="flow-url" type="text" placeholder="Link do Projeto Flow" class="w-full p-4 mobile-field outline-none text-sm">
-            
-            <label id="label-cookies" class="block p-4 text-center mobile-field border-dashed border-2 cursor-pointer text-[10px]">
-                <span id="cookie-status">🔑 CARREGAR COOKIES (JSON)</span>
-                <input type="file" id="cookies-file" class="hidden" accept=".json">
-            </label>
+        <input id="flow-url" type="text" placeholder="Link do Projeto Flow" class="w-full p-4 mobile-field outline-none text-sm">
+        
+        <label id="label-cookies" class="block p-4 text-center mobile-field border-dashed border-2 cursor-pointer text-[10px] border-slate-700">
+            <span id="cookie-label-text">🔑 CARREGAR COOKIES (JSON)</span>
+            <input type="file" id="cookies-file" class="hidden" accept=".json">
+            <div id="cookie-info" class="hidden text-green-400 font-bold uppercase mt-1">✓ Cookies Prontos</div>
+        </label>
 
-            <textarea id="prompt-input" class="w-full p-4 mobile-field h-24 outline-none text-sm resize-none" placeholder="Cole os prompts aqui..."></textarea>
+        <div class="relative">
+            <textarea id="prompt-input" class="w-full p-4 mobile-field h-32 outline-none text-sm resize-none" placeholder="Digite seus prompts aqui..."></textarea>
+            <div id="prompt-stats" class="absolute bottom-2 right-2 text-[9px] text-slate-500 font-mono">0 Prompts</div>
+        </div>
+        
+        <button id="btn-start" class="w-full p-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black text-lg shadow-lg">INICIAR ROBÔ</button>
+        <button id="btn-stop" class="hidden w-full p-4 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-black text-lg">PARAR OPERAÇÃO</button>
+
+        <div id="confirm-box" class="hidden p-5 bg-blue-950/40 border-2 border-blue-500/50 rounded-2xl text-center space-y-4">
+            <p class="text-xs text-slate-300 italic">Verifique o print. Se o site carregou, clique abaixo.</p>
+            <button id="btn-confirm" class="w-full p-4 bg-blue-500 text-white font-black rounded-xl">SIM, TUDO OK</button>
         </div>
 
-        <div id="action-buttons" class="space-y-2">
-            <button id="btn-start" class="w-full p-4 bg-blue-600 text-white rounded-2xl font-black">INICIAR ROBÔ</button>
-            <button id="btn-stop" class="hidden w-full p-4 bg-red-600 text-white rounded-2xl font-black">PARAR OPERAÇÃO</button>
-        </div>
-
-        <div id="confirm-box" class="hidden p-4 bg-blue-900/30 border border-blue-500 rounded-xl text-center space-y-2">
-            <p class="text-xs">Confirme se o site carregou corretamente no print.</p>
-            <button id="btn-confirm" class="w-full p-3 bg-blue-500 text-white font-bold rounded-lg">CONFIRMAR</button>
-        </div>
-
-        <div class="log-box" id="logs"></div>
+        <div id="logs" class="log-box"></div>
     </div>
 
     <script>
         const socket = io();
         let cookiesBase64 = null;
+        let prompts = [];
 
-        // Feedback de Conexão
-        socket.on('connect', () => addLog("🟢 Socket Conectado", "success"));
-
-        document.getElementById('cookies-file').onchange = (e) => {
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                cookiesBase64 = btoa(ev.target.result);
-                document.getElementById('cookie-status').innerHTML = "✅ COOKIES CARREGADOS";
-                document.getElementById('label-cookies').style.borderColor = "#10b981";
-            };
-            reader.readAsText(e.target.files[0]);
+        // Contador de Prompts
+        document.getElementById('prompt-input').oninput = (e) => {
+            const val = e.target.value.trim();
+            prompts = val.split('\n').map(l => l.trim()).filter(Boolean);
+            document.getElementById('prompt-stats').textContent = `${prompts.length} Prompts Identificados`;
         };
 
+        // Upload de Cookies
+        document.getElementById('cookies-file').onchange = (e) => {
+            const file = e.target.files[0];
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                cookiesBase64 = btoa(unescape(encodeURIComponent(ev.target.result)));
+                document.getElementById('cookie-info').classList.remove('hidden');
+                document.getElementById('cookie-label-text').classList.add('hidden');
+            };
+            reader.readAsText(file);
+        };
+
+        // Iniciar
         document.getElementById('btn-start').onclick = () => {
-            const prompts = document.getElementById('prompt-input').value.split('\n').filter(l => l.trim() !== "");
-            socket.emit('start-automation', {
-                link: document.getElementById('flow-url').value,
-                prompts: prompts,
-                cookiesBase64: cookiesBase64
-            });
+            const url = document.getElementById('flow-url').value;
+            if (!url || !cookiesBase64 || prompts.length === 0) return alert("Preencha tudo!");
+            
+            socket.emit('start-automation', { link: url, prompts, cookiesBase64 });
             document.getElementById('btn-start').classList.add('hidden');
             document.getElementById('btn-stop').classList.remove('hidden');
         };
 
-        // BOTAO ENCERRAR (SEM REFRESH)
-        document.getElementById('btn-stop').onclick = () => {
-            socket.emit('stop-automation');
-        };
-
-        // Resposta do server ao encerrar
-        socket.on('automation-stopped-confirm', () => {
-            document.getElementById('btn-stop').classList.add('hidden');
-            document.getElementById('btn-start').classList.remove('hidden');
-            document.getElementById('robot-view').classList.add('hidden');
-            document.getElementById('confirm-box').classList.add('hidden');
-            document.getElementById('btn-next-prompt').classList.add('hidden');
-            addLog("ℹ️ Interface resetada sem recarregar.", "info");
-        });
-
+        // Confirmação Visual
         document.getElementById('btn-confirm').onclick = () => {
             socket.emit('confirm-start');
             document.getElementById('confirm-box').classList.add('hidden');
         };
 
+        // Botão Imagem Gerada
         document.getElementById('btn-next-prompt').onclick = () => {
             socket.emit('next-prompt');
             document.getElementById('btn-next-prompt').classList.add('hidden');
         };
 
+        // Parar
+        document.getElementById('btn-stop').onclick = () => {
+            socket.emit('stop-automation');
+        };
+
+        // Socket Listeners
+        socket.on('log', (msg) => {
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${msg.includes('❌') ? 'log-error' : msg.includes('✅') ? 'log-success' : ''}`;
+            entry.innerHTML = msg;
+            document.getElementById('logs').appendChild(entry);
+            document.getElementById('logs').scrollTop = document.getElementById('logs').scrollHeight;
+        });
+
         socket.on('screenshot-update', (data) => {
             document.getElementById('robot-view').classList.remove('hidden');
             document.getElementById('screen-img').src = data.img;
-        });
-
-        socket.on('waiting-user-validation', () => {
-            document.getElementById('btn-next-prompt').classList.remove('hidden');
+            document.getElementById('view-title').textContent = data.title;
         });
 
         socket.on('automation-status', (data) => {
             if (data.showConfirm) document.getElementById('confirm-box').classList.remove('hidden');
         });
 
-        socket.on('log', (msg) => addLog(msg));
+        socket.on('waiting-user-validation', () => {
+            document.getElementById('btn-next-prompt').classList.remove('hidden');
+        });
 
-        function addLog(msg) {
-            const div = document.createElement('div');
-            div.className = "log-entry";
-            if(msg.includes("❌") || msg.includes("🚫")) div.style.color = "#f87171";
-            if(msg.includes("✅")) div.style.color = "#34d399";
-            div.innerHTML = msg;
-            const logs = document.getElementById('logs');
-            logs.appendChild(div);
-            logs.scrollTop = logs.scrollHeight;
-        }
+        socket.on('automation-stopped-confirmed', () => {
+            document.getElementById('btn-stop').classList.add('hidden');
+            document.getElementById('btn-start').classList.remove('hidden');
+            document.getElementById('robot-view').classList.add('hidden');
+        });
+
+        socket.on('automation-finished', () => {
+            alert("🏁 Automação concluída!");
+            location.reload();
+        });
     </script>
 </body>
 </html>
