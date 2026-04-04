@@ -23,11 +23,7 @@ io.on('connection', (socket) => {
     const closeEverything = async () => {
         if (screenshotInterval) clearInterval(screenshotInterval);
         if (browser) {
-            try {
-                await browser.close();
-            } catch (e) {
-                console.log("Erro ao fechar browser:", e.message);
-            }
+            try { await browser.close(); } catch (e) {}
         }
         browser = null;
         page = null;
@@ -37,35 +33,52 @@ io.on('connection', (socket) => {
         const { link, prompts, cookiesBase64 } = data;
 
         try {
-            socket.emit('log', "🚀 Iniciando Puppeteer no Render...");
+            socket.emit('log', "🚀 Iniciando Puppeteer em modo Mobile...");
 
             if (browser) await browser.close().catch(() => {});
 
-            // Lógica de abertura GARANTIDA + Modo Anti-Detecção
             browser = await puppeteer.launch({
                 headless: "new",
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--disable-web-security',
-                    '--window-size=1280,800',
-                    '--disable-blink-features=AutomationControlled', // Remove flag de robô
-                    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-first-run',
+                    '--no-service-autorun',
+                    '--password-store=basic',
+                    '--user-agent=Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36'
                 ]
             });
 
             page = await browser.newPage();
 
-            // Script para mascarar o Puppeteer (Evita erros de geração de imagem)
-            await page.evaluateOnNewDocument(() => {
-                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            // EMULAÇÃO DE DISPOSITIVO MÓVEL (Baseado no seu link do Samsung)
+            await page.setUserAgent('Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36');
+            await page.setViewport({ 
+                width: 390, 
+                height: 844, 
+                isMobile: true, 
+                hasTouch: true, 
+                deviceScaleFactor: 3 
             });
 
-            await page.setViewport({ width: 1280, height: 800 });
+            // OCULTAÇÃO DE BOT (Deep Stealth)
+            await page.evaluateOnNewDocument(() => {
+                // Remove a flag webdriver
+                delete navigator.__proto__.webdriver;
+                // Simula plugins reais
+                window.navigator.chrome = { runtime: {} };
+                // Simula permissões
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+                );
+            });
 
-            socket.emit('log', "🔑 Aplicando cookies de autenticação...");
+            socket.emit('log', "🔑 Aplicando cookies...");
             const cookiesRaw = Buffer.from(cookiesBase64, 'base64').toString('utf-8');
             const cookies = JSON.parse(cookiesRaw);
             await page.setCookie(...cookies);
@@ -73,56 +86,49 @@ io.on('connection', (socket) => {
             socket.emit('log', `🌐 Acessando: ${link}`);
             
             try {
-                await page.goto(link, { waitUntil: 'networkidle2', timeout: 70000 });
+                await page.goto(link, { waitUntil: 'networkidle2', timeout: 80000 });
             } catch (navError) {
-                socket.emit('log', "⚠️ Aviso: Carregamento parcial, tentando prosseguir...");
+                socket.emit('log', "⚠️ Carregamento demorado, prosseguindo...");
             }
 
             await delay(5000);
-
             const screenshot = await page.screenshot({ encoding: 'base64' });
-            socket.emit('screenshot-update', {
-                img: `data:image/png;base64,${screenshot}`,
-                title: "VERIFICAÇÃO DE LOGIN"
-            });
+            socket.emit('screenshot-update', { img: `data:image/png;base64,${screenshot}`, title: "MOBILE PREVIEW" });
             
             socket.emit('automation-status', { showConfirm: true });
-            socket.emit('log', "👀 Aguardando confirmação visual do usuário...");
 
             socket.removeAllListeners('confirm-start'); 
             socket.once('confirm-start', async () => {
-                socket.emit('log', "✅ Confirmação recebida! Iniciando automação...");
+                socket.emit('log', "✅ Iniciando geração...");
 
                 for (let i = 0; i < prompts.length; i++) {
-                    if (!browser || !page) break;
+                    if (!page) break;
 
                     const currentPrompt = prompts[i];
-                    socket.emit('log', `📝 Injetando Prompt ${i + 1}/${prompts.length}...`);
+                    socket.emit('log', `📝 Prompt ${i + 1}/${prompts.length}...`);
 
                     const selector = 'div[role="textbox"][contenteditable="true"], textarea';
-                    await page.waitForSelector(selector, { timeout: 30000 });
-                    await page.click(selector);
-                    
-                    await page.evaluate((text) => {
-                        const el = document.querySelector('div[role="textbox"][contenteditable="true"]') || document.querySelector("textarea");
-                        el.focus();
-                        document.execCommand('selectAll', false, null);
-                        document.execCommand('delete', false, null);
-                        const dt = new DataTransfer();
-                        dt.setData('text/plain', text);
-                        el.dispatchEvent(new InputEvent('beforeinput', { bubbles: true, dataTransfer: dt, inputType: 'insertFromPaste' }));
-                    }, currentPrompt);
+                    await page.waitForSelector(selector, { timeout: 40000 });
+                    await page.focus(selector);
+                    await delay(500);
 
-                    await delay(1200); // Delay levemente maior para segurança
+                    // Digitação humana (mais lenta e segura)
+                    await page.keyboard.type(currentPrompt, { delay: 30 });
 
+                    await delay(1500);
+
+                    // Clicar no botão de enviar
                     await page.evaluate(() => {
-                        const b = [...document.querySelectorAll("button, i, span")].find(e => 
-                            e.innerText?.includes("arrow_forward") || e.textContent?.includes("arrow_forward")
+                        const btns = [...document.querySelectorAll("button, i, span, div")];
+                        const b = btns.find(e => 
+                            e.innerText?.includes("arrow_forward") || 
+                            e.textContent?.includes("arrow_forward") ||
+                            e.getAttribute('aria-label')?.includes("Send")
                         );
                         if (b) b.click();
                     });
 
-                    socket.emit('log', `⏳ Aguardando geração do Prompt #${i+1}...`);
+                    socket.emit('log', `⏳ Monitorando geração...`);
 
                     const monitorGeneration = async () => {
                         return new Promise((resolve) => {
@@ -132,7 +138,7 @@ io.on('connection', (socket) => {
                                         const screen = await page.screenshot({ encoding: 'base64' });
                                         socket.emit('screenshot-update', { 
                                             img: `data:image/png;base64,${screen}`, 
-                                            title: `PROCESSANDO PROMPT #${i+1}` 
+                                            title: `GERANDO PROMPT #${i+1}` 
                                         });
                                         socket.emit('waiting-user-validation');
                                     }
@@ -147,29 +153,23 @@ io.on('connection', (socket) => {
                     };
 
                     await monitorGeneration();
-                    socket.emit('log', `✔️ Prompt ${i+1} concluído.`);
                 }
-
-                socket.emit('log', "🏁 Automação finalizada!");
+                socket.emit('log', "🏁 Finalizado!");
                 socket.emit('automation-finished');
             });
 
         } catch (error) {
-            socket.emit('log', `❌ Erro Fatal: ${error.message}`);
+            socket.emit('log', `❌ Erro: ${error.message}`);
             await closeEverything();
         }
     });
 
     socket.on('stop-automation', async () => {
         await closeEverything();
-        socket.emit('log', "🛑 Robô parado com sucesso!");
+        socket.emit('log', "🛑 Robô desligado.");
         socket.emit('automation-stopped-confirmed');
-    });
-
-    socket.on('disconnect', () => {
-        console.log('Cliente desconectado');
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Server rodando em http://localhost:${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Porta ${PORT}`));
